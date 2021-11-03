@@ -45,6 +45,7 @@ struct LVar {
 }
 
 /// `TVar` is our handle to a variable, but reading and writing always goes through a transaction.
+#[derive(Clone)]
 struct TVar<T> {
     id: ID,
     phantom: PhantomData<T>,
@@ -64,25 +65,41 @@ impl<T: Any + Sync + Send> TVar<T> {
     pub fn write(&self, tx: &mut Transaction, value: T) -> STMResult<()> {
         tx.write_tvar(self, value)
     }
+
+    pub fn update<F>(&self, tx: &mut Transaction, f: F) -> STMResult<()>
+    where
+        F: FnOnce(&T) -> T,
+    {
+        let v = self.read(tx)?;
+        self.write(tx, f(v.as_ref()))
+    }
 }
 
 /// STM holds the committed values and has a vector clock (ie. the version)
 /// that is incremented every time we start or commit a transaction.
+#[derive(Clone)]
 struct STM {
-    id: AtomicU64,
-    version: AtomicU64,
+    id: Arc<AtomicU64>,
+    version: Arc<AtomicU64>,
     // Transactions form multiple threads can try to access the storage,
     // so it needs to be protected by a lock.
-    store: RwLock<HashMap<ID, VVar>>,
+    store: Arc<RwLock<HashMap<ID, VVar>>>,
 }
 
 impl STM {
     pub fn new() -> STM {
         STM {
-            id: AtomicU64::new(0),
-            version: AtomicU64::new(0),
-            store: RwLock::new(HashMap::new()),
+            id: Arc::new(AtomicU64::new(0)),
+            version: Arc::new(AtomicU64::new(0)),
+            store: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Atomically create a new `TVar`.
+    pub fn new_tvar<T: Any + Send + Sync + Clone>(&self, value: &T) -> TVar<T> {
+        // Need to clone because the `f` might be invoked multiple times,
+        // so it cannot move a value.
+        self.atomically(|tx| Ok(tx.new_tvar(value.clone())))
     }
 
     /// Create a new transaction and run `f` until it
@@ -158,7 +175,7 @@ impl<'a> Transaction<'a> {
         Transaction {
             stm,
             // Increment the version when we start a new transaction, so we can always
-            // tell which one should get preference and nothing ands at the same time
+            // tell which one should get preference and nothing ends at the same time
             // another starts at.
             version: stm.next_version(),
             store: HashMap::new(),
@@ -197,7 +214,7 @@ impl<'a> Transaction<'a> {
     /// If it has changed since the beginning of the transaction,
     /// return a failure immediately, because we are not reading
     /// a consistent snapshot.
-    fn read_tvar<T: 'static>(&mut self, tvar: &TVar<T>) -> STMResult<Arc<T>> {
+    fn read_tvar<T: Any + Sync + Send>(&mut self, tvar: &TVar<T>) -> STMResult<Arc<T>> {
         match self.store.get_mut(&tvar.id) {
             Some(lvar) => {
                 // NOTE: Not changing `lvar.read` since it's not coming from the STM store now.
@@ -258,12 +275,67 @@ impl<'a> Transaction<'a> {
     }
 
     /// Perform a downcast on a var. Returns an `Arc` that tracks when that variable
-    /// will go out of scope. This avoid cloning on reads, if the value needs to be
+    /// will go out of scope. This avoids cloning on reads, if the value needs to be
     /// mutated then it can be cloned after being read.
-    fn downcast<T: Any>(value: &DynValue) -> Arc<T> {
-        match value.downcast_ref::<Arc<T>>() {
-            Some(s) => s.clone(),
-            None => unreachable!("TVar has wrong type"),
+    fn downcast<T: Any + Sync + Send>(value: &DynValue) -> Arc<T> {
+        match value.clone().downcast::<T>() {
+            Ok(s) => s,
+            Err(_) => unreachable!("TVar has wrong type"),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+
+    use super::*;
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn basics() {
+        let stm = STM::new();
+        let ta = stm.new_tvar(&1);
+        let tb = stm.new_tvar(&vec![1, 2, 3]);
+
+        let (a0, b0) = stm.atomically(|tx| {
+            let a = ta.read(tx)?;
+            let b = tb.read(tx)?;
+            let mut b1 = b.as_ref().clone();
+            b1.push(4);
+            tb.write(tx, b1)?;
+            Ok((a, b))
+        });
+
+        assert_eq!(*a0, 1);
+        assert_eq!(*b0, vec![1, 2, 3]);
+
+        let b1 = stm.atomically(|tx| tb.read(tx));
+        assert_eq!(*b1, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn conflict() {
+        let stm = STM::new();
+        let ta = stm.new_tvar(&1);
+
+        // Need to clone for the other thread.
+        let stmc = stm.clone(); // For the other thread.
+        let tac = ta.clone();
+
+        let t = thread::spawn(move || {
+            stmc.atomically(|tx| {
+                let a = tac.read(tx)?;
+                thread::sleep(Duration::from_millis(100));
+                Ok(a)
+            })
+        });
+
+        thread::sleep(Duration::from_millis(50));
+        stm.atomically(|tx| ta.update(tx, |x| x + 1));
+
+        let a = t.join().unwrap();
+
+        assert_eq!(*a, 2);
     }
 }

@@ -1,11 +1,15 @@
 use std::any::Any;
-use std::mem;
-use std::sync::atomic::Ordering;
+use std::collections::hash_map::Entry;
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::{Thread, ThreadId};
+use std::time::Duration;
 use std::{
     collections::HashMap,
     marker::PhantomData,
     sync::{atomic::AtomicU64, Arc, RwLock},
 };
+use std::{mem, thread};
 
 enum STMError {
     /// The transaction failed because a value changed.
@@ -32,11 +36,11 @@ fn retry<T>() -> STMResult<T> {
     Err(STMError::Retry)
 }
 
-fn guard<T>(cond: bool) -> STMResult<()> {
+fn guard(cond: bool) -> STMResult<()> {
     if cond {
         Ok(())
     } else {
-        Err(STMError::Retry)
+        retry()
     }
 }
 
@@ -89,23 +93,34 @@ impl<T: Any + Sync + Send> TVar<T> {
     }
 }
 
+struct WaitQueue {
+    /// Wait queue for the `TVar` IDs.
+    waiting: HashMap<ID, HashSet<ThreadId>>,
+    /// Flip a flag before waking a thread to indicate that it hasn't been a spurious event.
+    notified: HashMap<ThreadId, (Thread, Arc<AtomicBool>)>,
+}
+
 /// STM holds the committed values and has a vector clock (ie. the version)
 /// that is incremented every time we start or commit a transaction.
-#[derive(Clone)]
 struct STM {
-    id: Arc<AtomicU64>,
-    version: Arc<AtomicU64>,
+    id: AtomicU64,
+    version: AtomicU64,
     // Transactions form multiple threads can try to access the storage,
     // so it needs to be protected by a lock.
-    store: Arc<RwLock<HashMap<ID, VVar>>>,
+    store: RwLock<HashMap<ID, VVar>>,
+    queue: RwLock<WaitQueue>,
 }
 
 impl STM {
     pub fn new() -> STM {
         STM {
-            id: Arc::new(AtomicU64::new(0)),
-            version: Arc::new(AtomicU64::new(0)),
-            store: Arc::new(RwLock::new(HashMap::new())),
+            id: AtomicU64::new(0),
+            version: AtomicU64::new(0),
+            store: RwLock::new(HashMap::new()),
+            queue: RwLock::new(WaitQueue {
+                waiting: HashMap::new(),
+                notified: HashMap::new(),
+            }),
         }
     }
 
@@ -131,11 +146,17 @@ impl STM {
             match f(&mut tx) {
                 Ok(value) => {
                     if self.commit(&tx) {
+                        self.notify(tx);
                         return value;
                     }
                 }
-                Err(STMError::Failure) => {}
-                Err(STMError::Retry) => todo!(),
+                Err(STMError::Failure) => {
+                    // We can retry straight awy.
+                }
+                Err(STMError::Retry) => {
+                    // Block this thread until there's a change.
+                    self.wait(tx)
+                }
             }
         }
     }
@@ -148,6 +169,9 @@ impl STM {
         self.id.fetch_add(1, Ordering::SeqCst)
     }
 
+    /// In a critical section, check that every variable we have read/written
+    /// hasn't got a higher version number in the committed store. If so, add
+    /// all written values to the store.
     fn commit(&self, tx: &Transaction) -> bool {
         let mut guard = self.store.write().unwrap();
         let conflict = tx.store.iter().any(|(id, lvar)| match guard.get(id) {
@@ -170,6 +194,74 @@ impl STM {
                 }
             }
             true
+        }
+    }
+
+    /// For each variable that the transaction has read, subscribe to future
+    /// change notifications, then park this thread.
+    fn wait(&self, tx: Transaction) {
+        let read_ids = tx
+            .store
+            .into_iter()
+            .filter_map(|(id, lvar)| if lvar.read { Some(id) } else { None })
+            .collect::<Vec<_>>();
+
+        let notified = Arc::new(AtomicBool::new(false));
+        let thread_id = thread::current().id();
+
+        // Register in wait queue.
+        if !read_ids.is_empty() {
+            let mut guard = self.queue.write().unwrap();
+            for id in &read_ids {
+                let threads = guard.waiting.entry(*id).or_insert(HashSet::new());
+                threads.insert(thread_id);
+            }
+            guard
+                .notified
+                .insert(thread_id, (thread::current(), notified.clone()));
+        }
+
+        while !notified.load(Ordering::Acquire) {
+            // In case we didn't actually subscribe to anything, don't block forever.
+            thread::park_timeout(Duration::from_secs(60));
+        }
+
+        // Unregister from wait queue.
+        if !read_ids.is_empty() {
+            let mut guard = self.queue.write().unwrap();
+            for id in read_ids {
+                if let Entry::Occupied(mut o) = guard.waiting.entry(id) {
+                    o.get_mut().remove(&thread_id);
+                    if o.get().is_empty() {
+                        o.remove();
+                    }
+                }
+            }
+            guard.notified.remove(&thread_id);
+        }
+    }
+
+    /// Unpark any thread waiting on any of the modified `TVar`s.
+    fn notify(&self, tx: Transaction) {
+        let write_ids = tx
+            .store
+            .into_iter()
+            .filter_map(|(id, lvar)| if lvar.write { Some(id) } else { None })
+            .collect::<Vec<_>>();
+
+        if !write_ids.is_empty() {
+            let guard = self.queue.read().unwrap();
+            let thread_ids = write_ids
+                .iter()
+                .filter_map(|id| guard.waiting.get(id))
+                .flatten()
+                .collect::<HashSet<_>>();
+            for thread_id in thread_ids {
+                if let Some((thread, notified)) = guard.notified.get(thread_id) {
+                    notified.store(true, Ordering::SeqCst);
+                    thread.unpark();
+                }
+            }
         }
     }
 }
@@ -341,6 +433,7 @@ impl<'a> Transaction<'a> {
 mod test {
 
     use super::*;
+    use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
 
@@ -368,7 +461,7 @@ mod test {
 
     #[test]
     fn conflict() {
-        let stm = STM::new();
+        let stm = Arc::new(STM::new());
         let ta = stm.new_tvar(&1);
 
         // Need to clone for the other thread.
@@ -410,5 +503,30 @@ mod test {
 
         assert_eq!(*a, 1);
         assert_eq!(*b, "World");
+    }
+
+    #[test]
+    fn retry_wait_notify() {
+        let stm = Arc::new(STM::new());
+        let stmc = stm.clone();
+        let ta = stm.new_tvar(&1);
+        let tac = ta.clone();
+
+        let (sender, receiver) = mpsc::channel();
+
+        thread::spawn(move || {
+            let a = stmc.atomically(|tx| {
+                let a = tac.read(tx)?;
+                guard(*a > 1)?;
+                Ok(a)
+            });
+            sender.send(*a).unwrap()
+        });
+
+        thread::sleep(Duration::from_millis(100));
+        stm.atomically(|tx| ta.write(tx, 2));
+
+        let a = receiver.recv_timeout(Duration::from_millis(100)).unwrap();
+        assert_eq!(a, 2);
     }
 }

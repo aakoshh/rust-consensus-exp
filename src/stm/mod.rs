@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::mem;
 use std::sync::atomic::Ordering;
 use std::{
     collections::HashMap,
@@ -27,6 +28,18 @@ type Version = u64;
 /// The value can be read by many threads, so it has to be tracked by an `Arc`.
 type DynValue = Arc<dyn Any + Send + Sync>;
 
+fn retry<T>() -> STMResult<T> {
+    Err(STMError::Retry)
+}
+
+fn guard<T>(cond: bool) -> STMResult<()> {
+    if cond {
+        Ok(())
+    } else {
+        Err(STMError::Retry)
+    }
+}
+
 /// A versioned value. It will only be access through a transaction and
 /// a `TVar` that knows what the value can be downcast to.
 #[derive(Clone)]
@@ -35,6 +48,7 @@ struct VVar {
     value: DynValue,
 }
 /// A variable in the transaction log that remembers if it has been read and/or written to.
+#[derive(Clone)]
 struct LVar {
     var: VVar,
     /// Remember reads; these are the variables we need to watch if we retry.
@@ -102,22 +116,25 @@ impl STM {
         self.atomically(|tx| Ok(tx.new_tvar(value.clone())))
     }
 
+    /// Atomically read a `TVar`.
+    pub fn read_tvar<T: Any + Send + Sync + Clone>(&self, tvar: &TVar<T>) -> Arc<T> {
+        self.atomically(|tx| tvar.read(tx))
+    }
+
     /// Create a new transaction and run `f` until it
     pub fn atomically<F, T>(&self, f: F) -> T
     where
         F: Fn(&mut Transaction) -> STMResult<T>,
     {
-        let mut tx = Transaction::new(self);
         loop {
+            let mut tx = Transaction::new(self);
             match f(&mut tx) {
                 Ok(value) => {
                     if self.commit(&tx) {
                         return value;
-                    } else {
-                        tx.reset()
                     }
                 }
-                Err(STMError::Failure) => tx.reset(),
+                Err(STMError::Failure) => {}
                 Err(STMError::Retry) => todo!(),
             }
         }
@@ -157,6 +174,7 @@ impl STM {
     }
 }
 
+#[derive(Clone)]
 struct Transaction<'a> {
     stm: &'a STM,
     /// Version of the STM at the start of the transaction.
@@ -182,14 +200,9 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn reset(&mut self) {
-        self.store.clear();
-        self.version = self.stm.next_version();
-    }
-
     /// Create a new `TVar` in this transaction.
     /// It will only be added to the STM store when the transaction is committed.
-    fn new_tvar<T: Any + Send + Sync>(&mut self, value: T) -> TVar<T> {
+    pub fn new_tvar<T: Any + Send + Sync>(&mut self, value: T) -> TVar<T> {
         let tvar = TVar {
             id: self.stm.next_id(),
             phantom: PhantomData,
@@ -214,7 +227,7 @@ impl<'a> Transaction<'a> {
     /// If it has changed since the beginning of the transaction,
     /// return a failure immediately, because we are not reading
     /// a consistent snapshot.
-    fn read_tvar<T: Any + Sync + Send>(&mut self, tvar: &TVar<T>) -> STMResult<Arc<T>> {
+    pub fn read_tvar<T: Any + Sync + Send>(&mut self, tvar: &TVar<T>) -> STMResult<Arc<T>> {
         match self.store.get_mut(&tvar.id) {
             Some(lvar) => {
                 // NOTE: Not changing `lvar.read` since it's not coming from the STM store now.
@@ -251,7 +264,7 @@ impl<'a> Transaction<'a> {
     /// Write a value into the local store. If it has not been read
     /// before, just insert it with the version at the start of the
     /// transaction.
-    fn write_tvar<T: Any + Send + Sync>(&mut self, tvar: &TVar<T>, value: T) -> STMResult<()> {
+    pub fn write_tvar<T: Any + Send + Sync>(&mut self, tvar: &TVar<T>, value: T) -> STMResult<()> {
         match self.store.get_mut(&tvar.id) {
             Some(lvar) => {
                 lvar.write = true;
@@ -272,6 +285,45 @@ impl<'a> Transaction<'a> {
             }
         };
         Ok(())
+    }
+
+    /// Run the first function; if it returns a `Retry`,
+    /// run the second function; if that too returns `Retry`
+    /// then combine the values they have read, so that
+    /// the overall retry will react to any change.
+    ///
+    /// If they return `Failure` then just return that result,
+    /// since the transaction can be retried right now.
+    pub fn or<F, G, T>(&mut self, f: F, g: G) -> STMResult<T>
+    where
+        F: Fn(&mut Transaction) -> STMResult<T>,
+        G: Fn(&mut Transaction) -> STMResult<T>,
+    {
+        let mut snapshot = self.clone();
+        match f(self) {
+            Err(STMError::Retry) => {
+                // Restore the original transaction state.
+                mem::swap(self, &mut snapshot);
+
+                match g(self) {
+                    retry @ Err(STMError::Retry) =>
+                    // Add any variable read in the first attempt.
+                    {
+                        for (id, lvar) in snapshot.store.into_iter() {
+                            match self.store.get(&id) {
+                                Some(lvar) if lvar.read => {}
+                                _ => {
+                                    self.store.insert(id, lvar);
+                                }
+                            }
+                        }
+                        retry
+                    }
+                    other => other,
+                }
+            }
+            other => other,
+        }
     }
 
     /// Perform a downcast on a var. Returns an `Arc` that tracks when that variable
@@ -337,5 +389,26 @@ mod test {
         let a = t.join().unwrap();
 
         assert_eq!(*a, 2);
+    }
+
+    #[test]
+    fn or() {
+        let stm = STM::new();
+        let ta = stm.new_tvar(&1);
+        let tb = stm.new_tvar(&"Hello");
+
+        let (a, b) = stm.atomically(|tx| {
+            tb.write(tx, "World")?;
+            tx.or(
+                |tx| {
+                    ta.write(tx, 2)?;
+                    retry()
+                },
+                |tx| Ok((ta.read(tx)?, tb.read(tx)?)),
+            )
+        });
+
+        assert_eq!(*a, 1);
+        assert_eq!(*b, "World");
     }
 }

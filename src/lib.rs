@@ -7,6 +7,7 @@ use std::rc::Rc;
 use std::{collections::HashSet, hash::Hash};
 
 mod first;
+mod stm;
 
 trait Paxos {
     type Pid: Copy + PartialEq + Eq + Hash + PartialOrd + std::fmt::Debug;

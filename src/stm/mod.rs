@@ -44,13 +44,14 @@ fn guard(cond: bool) -> STMResult<()> {
     }
 }
 
-/// A versioned value. It will only be access through a transaction and
-/// a `TVar` that knows what the value can be downcast to.
+/// A versioned value. It will only be accessed through a transaction
+/// and a `TVar` that knows what the value can be downcast to.
 #[derive(Clone)]
 struct VVar {
     version: Version,
     value: DynValue,
 }
+
 /// A variable in the transaction log that remembers if it has been read and/or written to.
 #[derive(Clone)]
 struct LVar {
@@ -93,6 +94,7 @@ impl<T: Any + Sync + Send> TVar<T> {
     }
 }
 
+/// Data structure for threads to register their interest in `TVar`s when we trigger a retry.
 struct WaitQueue {
     /// Wait queue for the `TVar` IDs.
     waiting: HashMap<ID, HashSet<ThreadId>>,
@@ -136,7 +138,9 @@ impl STM {
         self.atomically(|tx| tvar.read(tx))
     }
 
-    /// Create a new transaction and run `f` until it
+    /// Create a new transaction and run `f` until it retunrs a successful result and
+    /// can be committed without running into version conflicts. Make sure `f` is free
+    /// of any side effects.
     pub fn atomically<F, T>(&self, f: F) -> T
     where
         F: Fn(&mut Transaction) -> STMResult<T>,
@@ -161,10 +165,12 @@ impl STM {
         }
     }
 
+    /// Get and increment the vector clock.
     fn next_version(&self) -> Version {
         self.version.fetch_add(1, Ordering::SeqCst)
     }
 
+    /// Get and increment the `TVar` ID sequence.
     fn next_id(&self) -> ID {
         self.id.fetch_add(1, Ordering::SeqCst)
     }

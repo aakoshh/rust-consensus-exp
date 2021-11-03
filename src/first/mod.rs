@@ -83,16 +83,17 @@ impl<P: Paxos + Clone> PFSM<P> {
                         }
                     }
 
-                    PFSM::do_add_promise(&mut inst, msg.src);
-
-                    let effects = inst
-                        .safe_value_vote
-                        .as_ref()
-                        .map(|vote| &vote.value)
-                        .or(inst.requested_value.as_ref())
-                        .map(|value| PFSM::send_propose(&inst, value.clone()))
-                        .into_iter()
-                        .collect::<Vec<_>>();
+                    let effects = if PFSM::do_add_promise(&mut inst, msg.src) {
+                        inst.safe_value_vote
+                            .as_ref()
+                            .map(|vote| &vote.value)
+                            .or(inst.requested_value.as_ref())
+                            .map(|value| PFSM::send_propose(&inst, value.clone()))
+                            .into_iter()
+                            .collect::<Vec<_>>()
+                    } else {
+                        Vec::new()
+                    };
 
                     PFSM::ok(inst, effects)
                 }

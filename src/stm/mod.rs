@@ -90,6 +90,9 @@ pub struct TVar<T> {
 }
 
 impl<T: Any + Sync + Send + Clone> TVar<T> {
+    /// Create a new `TVar`. The initial version is 0, so that if a
+    /// `TVar` is created in the middle of a transaction it will
+    /// not cause any MVCC conflict during the commit.
     pub fn new(value: T) -> TVar<T> {
         // This is shared between all `TVar`s.
         static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -98,12 +101,11 @@ impl<T: Any + Sync + Send + Clone> TVar<T> {
             id: COUNTER.fetch_add(1, Ordering::Relaxed),
             svar: Arc::new(SVar {
                 vvar: RwLock::new(VVar {
-                    version: next_version(),
+                    version: Default::default(),
                     value: Arc::new(value),
                 }),
                 queue: Mutex::new(Vec::new()),
             }),
-
             phantom: PhantomData,
         }
     }
@@ -173,7 +175,8 @@ pub struct Transaction {
     /// after we have started.
     version: Version,
     /// The local store of the transaction will only be accessed by a single thread,
-    /// so it doesn't need to be
+    /// so it doesn't need to be wrapped in an `Arc`. We have exclusive access through
+    /// the mutable reference to the transaction.
     log: HashMap<ID, LVar>,
     /// Time to wait during retries if no variables have been
     /// read by the transaction. This would be strange, but
@@ -493,6 +496,23 @@ mod test {
 
         thread::sleep(Duration::from_millis(250));
         atomically(|tx| ta.write(tx, 2));
+
+        let a = receiver.recv_timeout(Duration::from_millis(500)).unwrap();
+        assert_eq!(a, 2);
+    }
+
+    #[test]
+    fn new_tvar_in_transaction() {
+        let (sender, receiver) = mpsc::channel();
+
+        thread::spawn(move || {
+            let a = atomically(|tx| {
+                let t = TVar::new(1);
+                t.write(tx, 2)?;
+                t.read(tx)
+            });
+            sender.send(*a).unwrap();
+        });
 
         let a = receiver.recv_timeout(Duration::from_millis(500)).unwrap();
         assert_eq!(a, 2);

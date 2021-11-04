@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -110,27 +111,50 @@ impl<T: Any + Sync + Send + Clone> TVar<T> {
         }
     }
 
-    pub fn read(&self, tx: &mut Transaction) -> STMResult<Arc<T>> {
-        tx.read_tvar(self)
+    /// Read the value of the `TVar`. Only call this inside `atomically`.
+    pub fn read(&self) -> STMResult<Arc<T>> {
+        with_tx(|tx| tx.read(self))
     }
 
-    pub fn write(&self, tx: &mut Transaction, value: T) -> STMResult<()> {
-        tx.write_tvar(self, value)
+    /// Replace the value of the `TVar`. Oly call this inside `atomically`.
+    pub fn write(&self, value: T) -> STMResult<()> {
+        with_tx(move |tx| tx.write(self, value))
     }
 
-    pub fn update<F>(&self, tx: &mut Transaction, f: F) -> STMResult<()>
+    /// Apply an update on the value of the `TVar`. Only call this inside `atomically`.
+    pub fn update<F>(&self, f: F) -> STMResult<()>
     where
         F: FnOnce(&T) -> T,
     {
-        let v = self.read(tx)?;
-        self.write(tx, f(v.as_ref()))
+        let v = self.read()?;
+        self.write(f(v.as_ref()))
+    }
+
+    /// Apply an update on the value of the `TVar` and return a value. Only call this inside `atomically`.
+    pub fn modify<F, R>(&self, f: F) -> STMResult<R>
+    where
+        F: FnOnce(&T) -> (T, R),
+    {
+        let v = self.read()?;
+        let (w, r) = f(v.as_ref());
+        self.write(w)?;
+        Ok(r)
+    }
+
+    /// Replace the value of the `TVar` and return the previous value. Only call this inside `atomically`.
+    pub fn replace(&self, value: T) -> STMResult<Arc<T>> {
+        let v = self.read()?;
+        self.write(value)?;
+        Ok(v)
     }
 }
 
+/// Abandon the transaction and retry after some of the variables read have changed.
 pub fn retry<T>() -> STMResult<T> {
     Err(STMError::Retry)
 }
 
+/// Retry unless a given condition has been met.
 pub fn guard(cond: bool) -> STMResult<()> {
     if cond {
         Ok(())
@@ -139,31 +163,115 @@ pub fn guard(cond: bool) -> STMResult<()> {
     }
 }
 
+/// Run the first function; if it returns a `Retry`,
+/// run the second function; if that too returns `Retry`
+/// then combine the values they have read, so that
+/// the overall retry will react to any change.
+///
+/// If they return `Failure` then just return that result,
+/// since the transaction can be retried right now.
+pub fn or<F, G, T>(f: F, g: G) -> STMResult<T>
+where
+    F: FnOnce() -> STMResult<T>,
+    G: FnOnce() -> STMResult<T>,
+{
+    let mut snapshot = with_tx(|tx| tx.clone());
+
+    match f() {
+        Err(STMError::Retry) => {
+            // Restore the original transaction state.
+            with_tx(|tx| {
+                mem::swap(tx, &mut snapshot);
+            });
+
+            match g() {
+                retry @ Err(STMError::Retry) =>
+                // Add any variable read in the first attempt.
+                {
+                    with_tx(|tx| {
+                        for (id, lvar) in snapshot.log.into_iter() {
+                            match tx.log.get(&id) {
+                                Some(lvar) if lvar.read => {}
+                                _ => {
+                                    tx.log.insert(id, lvar);
+                                }
+                            }
+                        }
+                    });
+                    retry
+                }
+                other => other,
+            }
+        }
+        other => other,
+    }
+}
+
 /// Create a new transaction and run `f` until it retunrs a successful result and
 /// can be committed without running into version conflicts. Make sure `f` is free
 /// of any side effects.
 pub fn atomically<F, T>(f: F) -> T
 where
-    F: Fn(&mut Transaction) -> STMResult<T>,
+    F: Fn() -> STMResult<T>,
 {
     loop {
-        let mut tx = Transaction::new();
-        match f(&mut tx) {
-            Ok(value) => {
-                if tx.commit() {
-                    tx.notify();
-                    return value;
+        TX.with(|tref| {
+            let mut t = tref.borrow_mut();
+            if t.is_some() {
+                // Nesting is not supported. Use `or` instead.
+                panic!("Already running in an atomic transaction!")
+            }
+            *t = Some(Transaction::new());
+        });
+
+        let result = f();
+
+        if let Some(value) = TX.with(|tref| {
+            let tx = tref.borrow_mut().take().unwrap();
+            match result {
+                Ok(value) => {
+                    if tx.commit() {
+                        tx.notify();
+                        Some(value)
+                    } else {
+                        None
+                    }
+                }
+                Err(STMError::Failure) => {
+                    // We can retry straight away.
+                    None
+                }
+                Err(STMError::Retry) => {
+                    // Block this thread until there's a change.
+                    tx.wait();
+                    None
                 }
             }
-            Err(STMError::Failure) => {
-                // We can retry straight awy.
-            }
-            Err(STMError::Retry) => {
-                // Block this thread until there's a change.
-                tx.wait()
-            }
+        }) {
+            return value;
         }
     }
+}
+
+/// Borrow the thread local transaction and pass it to a function.
+pub fn with_tx<F, T>(f: F) -> T
+where
+    F: FnOnce(&mut Transaction) -> T,
+{
+    TX.with(|tref| {
+        let mut tx = tref.borrow_mut();
+        match tx.as_mut() {
+            None => panic!("Not running in an atomic transaction!"),
+            Some(tx) => f(tx),
+        }
+    })
+}
+
+thread_local! {
+  /// Using a thread local transaction for easier syntax than
+  /// if we had to pass around the transaction everywhere.
+  /// There is a 2x performance penalty for this.
+  static TX: RefCell<Option<Transaction>> = RefCell::new(None);
 }
 
 #[derive(Clone)]
@@ -200,7 +308,7 @@ impl Transaction {
     /// If it has changed since the beginning of the transaction,
     /// return a failure immediately, because we are not reading
     /// a consistent snapshot.
-    pub fn read_tvar<T: Any + Sync + Send>(&mut self, tvar: &TVar<T>) -> STMResult<Arc<T>> {
+    pub fn read<T: Any + Sync + Send>(&mut self, tvar: &TVar<T>) -> STMResult<Arc<T>> {
         match self.log.get(&tvar.id) {
             Some(lvar) => Ok(lvar.vvar.downcast()),
             None => {
@@ -228,7 +336,7 @@ impl Transaction {
     /// Write a value into the local store. If it has not been read
     /// before, just insert it with the version at the start of the
     /// transaction.
-    pub fn write_tvar<T: Any + Sync + Send>(&mut self, tvar: &TVar<T>, value: T) -> STMResult<()> {
+    pub fn write<T: Any + Sync + Send>(&mut self, tvar: &TVar<T>, value: T) -> STMResult<()> {
         match self.log.get_mut(&tvar.id) {
             Some(lvar) => {
                 lvar.write = true;
@@ -250,45 +358,6 @@ impl Transaction {
             }
         };
         Ok(())
-    }
-
-    /// Run the first function; if it returns a `Retry`,
-    /// run the second function; if that too returns `Retry`
-    /// then combine the values they have read, so that
-    /// the overall retry will react to any change.
-    ///
-    /// If they return `Failure` then just return that result,
-    /// since the transaction can be retried right now.
-    pub fn or<F, G, T>(&mut self, f: F, g: G) -> STMResult<T>
-    where
-        F: Fn(&mut Transaction) -> STMResult<T>,
-        G: Fn(&mut Transaction) -> STMResult<T>,
-    {
-        let mut snapshot = self.clone();
-        match f(self) {
-            Err(STMError::Retry) => {
-                // Restore the original transaction state.
-                mem::swap(self, &mut snapshot);
-
-                match g(self) {
-                    retry @ Err(STMError::Retry) =>
-                    // Add any variable read in the first attempt.
-                    {
-                        for (id, lvar) in snapshot.log.into_iter() {
-                            match self.log.get(&id) {
-                                Some(lvar) if lvar.read => {}
-                                _ => {
-                                    self.log.insert(id, lvar);
-                                }
-                            }
-                        }
-                        retry
-                    }
-                    other => other,
-                }
-            }
-            other => other,
-        }
     }
 
     /// Sort the logs by ID so we can acquire locks in a deterministic order
@@ -419,19 +488,19 @@ mod test {
         let ta = TVar::new(1);
         let tb = TVar::new(vec![1, 2, 3]);
 
-        let (a0, b0) = atomically(|tx| {
-            let a = ta.read(tx)?;
-            let b = tb.read(tx)?;
+        let (a0, b0) = atomically(|| {
+            let a = ta.read()?;
+            let b = tb.read()?;
             let mut b1 = b.as_ref().clone();
             b1.push(4);
-            tb.write(tx, b1)?;
+            tb.write(b1)?;
             Ok((a, b))
         });
 
         assert_eq!(*a0, 1);
         assert_eq!(*b0, vec![1, 2, 3]);
 
-        let b1 = atomically(|tx| tb.read(tx));
+        let b1 = atomically(|| tb.read());
         assert_eq!(*b1, vec![1, 2, 3, 4]);
     }
 
@@ -443,15 +512,15 @@ mod test {
         let tac = ta.clone();
 
         let t = thread::spawn(move || {
-            atomically(|tx| {
-                let a = tac.read(tx)?;
+            atomically(|| {
+                let a = tac.read()?;
                 thread::sleep(Duration::from_millis(100));
                 Ok(a)
             })
         });
 
         thread::sleep(Duration::from_millis(50));
-        atomically(|tx| ta.update(tx, |x| x + 1));
+        atomically(|| ta.update(|x| x + 1));
 
         let a = t.join().unwrap();
 
@@ -459,18 +528,18 @@ mod test {
     }
 
     #[test]
-    fn or() {
+    fn or_retry_first_return_second() {
         let ta = TVar::new(1);
         let tb = TVar::new("Hello");
 
-        let (a, b) = atomically(|tx| {
-            tb.write(tx, "World")?;
-            tx.or(
-                |tx| {
-                    ta.write(tx, 2)?;
+        let (a, b) = atomically(|| {
+            tb.write("World")?;
+            or(
+                || {
+                    ta.write(2)?;
                     retry()
                 },
-                |tx| Ok((ta.read(tx)?, tb.read(tx)?)),
+                || Ok((ta.read()?, tb.read()?)),
             )
         });
 
@@ -486,8 +555,8 @@ mod test {
         let (sender, receiver) = mpsc::channel();
 
         thread::spawn(move || {
-            let a = atomically(|tx| {
-                let a = tac.read(tx)?;
+            let a = atomically(|| {
+                let a = tac.read()?;
                 guard(*a > 1)?;
                 Ok(a)
             });
@@ -495,7 +564,7 @@ mod test {
         });
 
         thread::sleep(Duration::from_millis(250));
-        atomically(|tx| ta.write(tx, 2));
+        atomically(|| ta.write(2));
 
         let a = receiver.recv_timeout(Duration::from_millis(500)).unwrap();
         assert_eq!(a, 2);
@@ -506,15 +575,33 @@ mod test {
         let (sender, receiver) = mpsc::channel();
 
         thread::spawn(move || {
-            let a = atomically(|tx| {
+            let a = atomically(|| {
                 let t = TVar::new(1);
-                t.write(tx, 2)?;
-                t.read(tx)
+                t.write(2)?;
+                t.read()
             });
             sender.send(*a).unwrap();
         });
 
         let a = receiver.recv_timeout(Duration::from_millis(500)).unwrap();
         assert_eq!(a, 2);
+    }
+
+    #[test]
+    #[should_panic]
+    fn nested_atomically() {
+        atomically(|| Ok(atomically(|| Ok(()))))
+    }
+
+    #[test]
+    #[should_panic]
+    fn read_outside_atomically() {
+        let _ = TVar::new("Don't read it!").read();
+    }
+
+    #[test]
+    #[should_panic]
+    fn write_outside_atomically() {
+        let _ = TVar::new(0).write(1);
     }
 }

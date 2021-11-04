@@ -111,6 +111,7 @@ struct STM {
     // so it needs to be protected by a lock.
     store: RwLock<HashMap<ID, VVar>>,
     queue: RwLock<WaitQueue>,
+    empty_retry_duration: Duration,
 }
 
 impl STM {
@@ -123,6 +124,7 @@ impl STM {
                 waiting: HashMap::new(),
                 notified: HashMap::new(),
             }),
+            empty_retry_duration: Duration::from_secs(60),
         }
     }
 
@@ -212,7 +214,8 @@ impl STM {
             .filter_map(|(id, lvar)| if lvar.read { Some(id) } else { None })
             .collect::<Vec<_>>();
 
-        let notified = Arc::new(AtomicBool::new(false));
+        // If there are no variables subscribed to then just wait a bit.
+        let notified = Arc::new(AtomicBool::new(read_ids.is_empty()));
         let thread_id = thread::current().id();
 
         // Register in wait queue.
@@ -227,9 +230,12 @@ impl STM {
                 .insert(thread_id, (thread::current(), notified.clone()));
         }
 
-        while !notified.load(Ordering::Acquire) {
+        loop {
             // In case we didn't actually subscribe to anything, don't block forever.
-            thread::park_timeout(Duration::from_secs(60));
+            thread::park_timeout(self.empty_retry_duration);
+            if notified.load(Ordering::Acquire) {
+                break;
+            }
         }
 
         // Unregister from wait queue.

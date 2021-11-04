@@ -1,8 +1,7 @@
 use std::any::Any;
-use std::collections::hash_map::Entry;
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread::{Thread, ThreadId};
+use std::sync::Mutex;
+use std::thread::Thread;
 use std::time::Duration;
 use std::{
     collections::HashMap,
@@ -11,7 +10,7 @@ use std::{
 };
 use std::{mem, thread};
 
-enum STMError {
+pub enum STMError {
     /// The transaction failed because a value changed.
     /// It can be retried straight away.
     Failure,
@@ -29,33 +28,50 @@ type ID = u64;
 /// MVCC version.
 type Version = u64;
 
+/// Get and increment the vector clock.
+fn next_version() -> Version {
+    static VERSION: AtomicU64 = AtomicU64::new(0);
+    VERSION.fetch_add(1, Ordering::SeqCst)
+}
+
 /// The value can be read by many threads, so it has to be tracked by an `Arc`.
+/// Keeping it dynamic becuase trying to make `LVar` generic turned out to be
+/// a bit of a nightmare.
 type DynValue = Arc<dyn Any + Send + Sync>;
 
-fn retry<T>() -> STMResult<T> {
-    Err(STMError::Retry)
-}
-
-fn guard(cond: bool) -> STMResult<()> {
-    if cond {
-        Ok(())
-    } else {
-        retry()
-    }
-}
-
-/// A versioned value. It will only be accessed through a transaction
-/// and a `TVar` that knows what the value can be downcast to.
+/// A versioned value. It will only be accessed through a transaction and a `TVar`.
 #[derive(Clone)]
 struct VVar {
     version: Version,
     value: DynValue,
 }
 
+impl VVar {
+    /// Perform a downcast on a var. Returns an `Arc` that tracks when that variable
+    /// will go out of scope. This avoids cloning on reads, if the value needs to be
+    /// mutated then it can be cloned after being read.
+    fn downcast<T: Any + Sync + Send>(&self) -> Arc<T> {
+        match self.value.clone().downcast::<T>() {
+            Ok(s) => s,
+            Err(_) => unreachable!("TVar has wrong type"),
+        }
+    }
+}
+
+/// Sync variable, hold the committed value and the waiting threads.
+struct SVar {
+    vvar: RwLock<VVar>,
+    /// Threads with their notifications flags that wait for the `TVar` to get an update.
+    queue: Mutex<Vec<(Thread, Arc<AtomicBool>)>>,
+}
+
 /// A variable in the transaction log that remembers if it has been read and/or written to.
 #[derive(Clone)]
 struct LVar {
-    var: VVar,
+    // Hold on the original that we need to commit to.
+    svar: Arc<SVar>,
+    // Hold on to the value as it was read or written for MVCC comparison.
+    vvar: VVar,
     /// Remember reads; these are the variables we need to watch if we retry.
     read: bool,
     /// Remember writes; these are the variables that need to be stored at the
@@ -63,18 +79,32 @@ struct LVar {
     write: bool,
 }
 
-/// `TVar` is our handle to a variable, but reading and writing always goes through a transaction.
+/// `TVar` is our handle to a variable, but reading and writing go through a transaction.
+/// It also tracks which threads are waiting on it.
 #[derive(Clone)]
-struct TVar<T> {
+pub struct TVar<T> {
     id: ID,
+    svar: Arc<SVar>,
     phantom: PhantomData<T>,
 }
 
-impl<T: Any + Sync + Send> TVar<T> {
-    /// Create a new `TVar` with a fresh ID and insert
-    /// its value into the transaction log.
-    pub fn new(tx: &mut Transaction, value: T) -> TVar<T> {
-        tx.new_tvar(value)
+impl<T: Any + Sync + Send + Clone> TVar<T> {
+    pub fn new(value: T) -> TVar<T> {
+        // This is shared between all `TVar`s.
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        TVar {
+            id: COUNTER.fetch_add(1, Ordering::Relaxed),
+            svar: Arc::new(SVar {
+                vvar: RwLock::new(VVar {
+                    version: next_version(),
+                    value: Arc::new(value),
+                }),
+                queue: Mutex::new(Vec::new()),
+            }),
+
+            phantom: PhantomData,
+        }
     }
 
     pub fn read(&self, tx: &mut Transaction) -> STMResult<Arc<T>> {
@@ -94,193 +124,47 @@ impl<T: Any + Sync + Send> TVar<T> {
     }
 }
 
-/// Data structure for threads to register their interest in `TVar`s when we trigger a retry.
-struct WaitQueue {
-    /// Wait queue for the `TVar` IDs.
-    waiting: HashMap<ID, HashSet<ThreadId>>,
-    /// Flip a flag before waking a thread to indicate that it hasn't been a spurious event.
-    notified: HashMap<ThreadId, (Thread, Arc<AtomicBool>)>,
+pub fn retry<T>() -> STMResult<T> {
+    Err(STMError::Retry)
 }
 
-/// STM holds the committed values and has a vector clock (ie. the version)
-/// that is incremented every time we start or commit a transaction.
-struct STM {
-    id: AtomicU64,
-    version: AtomicU64,
-    // Transactions form multiple threads can try to access the storage,
-    // so it needs to be protected by a lock.
-    store: RwLock<HashMap<ID, VVar>>,
-    queue: RwLock<WaitQueue>,
-    empty_retry_duration: Duration,
+pub fn guard(cond: bool) -> STMResult<()> {
+    if cond {
+        Ok(())
+    } else {
+        retry()
+    }
 }
 
-impl STM {
-    pub fn new() -> STM {
-        STM {
-            id: AtomicU64::new(0),
-            version: AtomicU64::new(0),
-            store: RwLock::new(HashMap::new()),
-            queue: RwLock::new(WaitQueue {
-                waiting: HashMap::new(),
-                notified: HashMap::new(),
-            }),
-            empty_retry_duration: Duration::from_secs(60),
-        }
-    }
-
-    /// Atomically create a new `TVar`.
-    pub fn new_tvar<T: Any + Send + Sync + Clone>(&self, value: &T) -> TVar<T> {
-        // Need to clone because the `f` might be invoked multiple times,
-        // so it cannot move a value.
-        self.atomically(|tx| Ok(tx.new_tvar(value.clone())))
-    }
-
-    /// Atomically read a `TVar`.
-    pub fn read_tvar<T: Any + Send + Sync + Clone>(&self, tvar: &TVar<T>) -> Arc<T> {
-        self.atomically(|tx| tvar.read(tx))
-    }
-
-    /// Create a new transaction and run `f` until it retunrs a successful result and
-    /// can be committed without running into version conflicts. Make sure `f` is free
-    /// of any side effects.
-    pub fn atomically<F, T>(&self, f: F) -> T
-    where
-        F: Fn(&mut Transaction) -> STMResult<T>,
-    {
-        loop {
-            let mut tx = Transaction::new(self);
-            match f(&mut tx) {
-                Ok(value) => {
-                    if self.commit(&tx) {
-                        self.notify(tx);
-                        return value;
-                    }
-                }
-                Err(STMError::Failure) => {
-                    // We can retry straight awy.
-                }
-                Err(STMError::Retry) => {
-                    // Block this thread until there's a change.
-                    self.wait(tx)
+/// Create a new transaction and run `f` until it retunrs a successful result and
+/// can be committed without running into version conflicts. Make sure `f` is free
+/// of any side effects.
+pub fn atomically<F, T>(f: F) -> T
+where
+    F: Fn(&mut Transaction) -> STMResult<T>,
+{
+    loop {
+        let mut tx = Transaction::new();
+        match f(&mut tx) {
+            Ok(value) => {
+                if tx.commit() {
+                    tx.notify();
+                    return value;
                 }
             }
-        }
-    }
-
-    /// Get and increment the vector clock.
-    fn next_version(&self) -> Version {
-        self.version.fetch_add(1, Ordering::SeqCst)
-    }
-
-    /// Get and increment the `TVar` ID sequence.
-    fn next_id(&self) -> ID {
-        self.id.fetch_add(1, Ordering::SeqCst)
-    }
-
-    /// In a critical section, check that every variable we have read/written
-    /// hasn't got a higher version number in the committed store. If so, add
-    /// all written values to the store.
-    fn commit(&self, tx: &Transaction) -> bool {
-        let mut guard = self.store.write().unwrap();
-        let conflict = tx.store.iter().any(|(id, lvar)| match guard.get(id) {
-            None => false,
-            Some(vvar) => vvar.version > lvar.var.version,
-        });
-        if conflict {
-            false
-        } else {
-            let commit_version = self.next_version();
-            for (id, lvar) in &tx.store {
-                if lvar.write {
-                    guard.insert(
-                        *id,
-                        VVar {
-                            version: commit_version,
-                            value: lvar.var.value.clone(),
-                        },
-                    );
-                }
+            Err(STMError::Failure) => {
+                // We can retry straight awy.
             }
-            true
-        }
-    }
-
-    /// For each variable that the transaction has read, subscribe to future
-    /// change notifications, then park this thread.
-    fn wait(&self, tx: Transaction) {
-        let read_ids = tx
-            .store
-            .into_iter()
-            .filter_map(|(id, lvar)| if lvar.read { Some(id) } else { None })
-            .collect::<Vec<_>>();
-
-        // If there are no variables subscribed to then just wait a bit.
-        let notified = Arc::new(AtomicBool::new(read_ids.is_empty()));
-        let thread_id = thread::current().id();
-
-        // Register in wait queue.
-        if !read_ids.is_empty() {
-            let mut guard = self.queue.write().unwrap();
-            for id in &read_ids {
-                let threads = guard.waiting.entry(*id).or_insert(HashSet::new());
-                threads.insert(thread_id);
-            }
-            guard
-                .notified
-                .insert(thread_id, (thread::current(), notified.clone()));
-        }
-
-        loop {
-            // In case we didn't actually subscribe to anything, don't block forever.
-            thread::park_timeout(self.empty_retry_duration);
-            if notified.load(Ordering::Acquire) {
-                break;
-            }
-        }
-
-        // Unregister from wait queue.
-        if !read_ids.is_empty() {
-            let mut guard = self.queue.write().unwrap();
-            for id in read_ids {
-                if let Entry::Occupied(mut o) = guard.waiting.entry(id) {
-                    o.get_mut().remove(&thread_id);
-                    if o.get().is_empty() {
-                        o.remove();
-                    }
-                }
-            }
-            guard.notified.remove(&thread_id);
-        }
-    }
-
-    /// Unpark any thread waiting on any of the modified `TVar`s.
-    fn notify(&self, tx: Transaction) {
-        let write_ids = tx
-            .store
-            .into_iter()
-            .filter_map(|(id, lvar)| if lvar.write { Some(id) } else { None })
-            .collect::<Vec<_>>();
-
-        if !write_ids.is_empty() {
-            let guard = self.queue.read().unwrap();
-            let thread_ids = write_ids
-                .iter()
-                .filter_map(|id| guard.waiting.get(id))
-                .flatten()
-                .collect::<HashSet<_>>();
-            for thread_id in thread_ids {
-                if let Some((thread, notified)) = guard.notified.get(thread_id) {
-                    notified.store(true, Ordering::SeqCst);
-                    thread.unpark();
-                }
+            Err(STMError::Retry) => {
+                // Block this thread until there's a change.
+                tx.wait()
             }
         }
     }
 }
 
 #[derive(Clone)]
-struct Transaction<'a> {
-    stm: &'a STM,
+pub struct Transaction {
     /// Version of the STM at the start of the transaction.
     /// When we commit, it's going to be done with the version
     /// at the end of the transaction, so that we can detect
@@ -289,42 +173,23 @@ struct Transaction<'a> {
     version: Version,
     /// The local store of the transaction will only be accessed by a single thread,
     /// so it doesn't need to be
-    store: HashMap<ID, LVar>,
+    log: HashMap<ID, LVar>,
+    /// Time to wait during retries if no variables have been
+    /// read by the transaction. This would be strange, but
+    /// it's better than blocking a thread forever.
+    pub empty_retry_wait_timeout: Duration,
 }
 
-impl<'a> Transaction<'a> {
-    fn new(stm: &STM) -> Transaction {
+impl Transaction {
+    fn new() -> Transaction {
         Transaction {
-            stm,
             // Increment the version when we start a new transaction, so we can always
             // tell which one should get preference and nothing ends at the same time
             // another starts at.
-            version: stm.next_version(),
-            store: HashMap::new(),
+            version: next_version(),
+            log: HashMap::new(),
+            empty_retry_wait_timeout: Duration::from_secs(60),
         }
-    }
-
-    /// Create a new `TVar` in this transaction.
-    /// It will only be added to the STM store when the transaction is committed.
-    pub fn new_tvar<T: Any + Send + Sync>(&mut self, value: T) -> TVar<T> {
-        let tvar = TVar {
-            id: self.stm.next_id(),
-            phantom: PhantomData,
-        };
-
-        self.store.insert(
-            tvar.id,
-            LVar {
-                var: VVar {
-                    version: self.version,
-                    value: Arc::new(value),
-                },
-                read: false,
-                write: true,
-            },
-        );
-
-        tvar
     }
 
     /// Read a value from the local store, or the STM system.
@@ -332,34 +197,25 @@ impl<'a> Transaction<'a> {
     /// return a failure immediately, because we are not reading
     /// a consistent snapshot.
     pub fn read_tvar<T: Any + Sync + Send>(&mut self, tvar: &TVar<T>) -> STMResult<Arc<T>> {
-        match self.store.get_mut(&tvar.id) {
-            Some(lvar) => {
-                // NOTE: Not changing `lvar.read` since it's not coming from the STM store now.
-                Ok(Transaction::downcast(&lvar.var.value))
-            }
+        match self.log.get(&tvar.id) {
+            Some(lvar) => Ok(lvar.vvar.downcast()),
             None => {
-                let guard = self.stm.store.read().unwrap();
-
-                match guard.get(&tvar.id) {
-                    Some(vvar) if vvar.version >= self.version => {
-                        // There's no point carrying on with the transaction.
-                        Err(STMError::Failure)
-                    }
-
-                    Some(vvar) => {
-                        self.store.insert(
-                            tvar.id,
-                            LVar {
-                                var: vvar.clone(),
-                                read: true,
-                                write: false,
-                            },
-                        );
-                        Ok(Transaction::downcast(&vvar.value))
-                    }
-                    None => {
-                        panic!("Cannot read the TVar from STM!")
-                    }
+                let guard = tvar.svar.vvar.read().unwrap();
+                if guard.version >= self.version {
+                    // The TVar has been written to since we started this transaction.
+                    // There is no point carrying on with the rest of it, but we can retry.
+                    Err(STMError::Failure)
+                } else {
+                    self.log.insert(
+                        tvar.id,
+                        LVar {
+                            svar: tvar.svar.clone(),
+                            vvar: guard.clone(),
+                            read: true,
+                            write: false,
+                        },
+                    );
+                    Ok(guard.downcast())
                 }
             }
         }
@@ -368,17 +224,18 @@ impl<'a> Transaction<'a> {
     /// Write a value into the local store. If it has not been read
     /// before, just insert it with the version at the start of the
     /// transaction.
-    pub fn write_tvar<T: Any + Send + Sync>(&mut self, tvar: &TVar<T>, value: T) -> STMResult<()> {
-        match self.store.get_mut(&tvar.id) {
+    pub fn write_tvar<T: Any + Sync + Send>(&mut self, tvar: &TVar<T>, value: T) -> STMResult<()> {
+        match self.log.get_mut(&tvar.id) {
             Some(lvar) => {
                 lvar.write = true;
-                lvar.var.value = Arc::new(value);
+                lvar.vvar.value = Arc::new(value);
             }
             None => {
-                self.store.insert(
+                self.log.insert(
                     tvar.id,
                     LVar {
-                        var: VVar {
+                        svar: tvar.svar.clone(),
+                        vvar: VVar {
                             version: self.version,
                             value: Arc::new(value),
                         },
@@ -413,11 +270,11 @@ impl<'a> Transaction<'a> {
                     retry @ Err(STMError::Retry) =>
                     // Add any variable read in the first attempt.
                     {
-                        for (id, lvar) in snapshot.store.into_iter() {
-                            match self.store.get(&id) {
+                        for (id, lvar) in snapshot.log.into_iter() {
+                            match self.log.get(&id) {
                                 Some(lvar) if lvar.read => {}
                                 _ => {
-                                    self.store.insert(id, lvar);
+                                    self.log.insert(id, lvar);
                                 }
                             }
                         }
@@ -430,13 +287,96 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    /// Perform a downcast on a var. Returns an `Arc` that tracks when that variable
-    /// will go out of scope. This avoids cloning on reads, if the value needs to be
-    /// mutated then it can be cloned after being read.
-    fn downcast<T: Any + Sync + Send>(value: &DynValue) -> Arc<T> {
-        match value.clone().downcast::<T>() {
-            Ok(s) => s,
-            Err(_) => unreachable!("TVar has wrong type"),
+    /// Sort the logs by ID so we can acquire locks in a deterministic order
+    /// and avoid deadlocks.
+    fn sorted_log(&self) -> Vec<(&ID, &LVar)> {
+        let mut log = self.log.iter().collect::<Vec<_>>();
+        log.sort_unstable_by_key(|(id, _)| *id);
+        log
+    }
+
+    /// In a critical section, check that every variable we have read/written
+    /// hasn't got a higher version number in the committed store.
+    /// If so, add all written values to the store.
+    fn commit(&self) -> bool {
+        // Acquire write locks to all `SVar`s in the transaction.
+        let log = self.sorted_log();
+
+        let locks = log
+            .iter()
+            .map(|(_, lvar)| (lvar, lvar.svar.vvar.write().unwrap()))
+            .collect::<Vec<_>>();
+
+        let has_conflict = locks
+            .iter()
+            .any(|(lvar, lock)| lock.version > lvar.vvar.version);
+
+        if has_conflict {
+            false
+        } else {
+            let commit_version = next_version();
+            for (lvar, mut lock) in locks {
+                if lvar.write {
+                    lock.version = commit_version;
+                    lock.value = lvar.vvar.value.clone();
+                }
+            }
+            true
+        }
+    }
+
+    /// For each variable that the transaction has read, subscribe to future
+    /// change notifications, then park this thread.
+    fn wait(self) {
+        let read_log = self
+            .sorted_log()
+            .into_iter()
+            .filter(|(_, lvar)| lvar.read)
+            .collect::<Vec<_>>();
+
+        // If there are no variables subscribed to then just wait a bit.
+        let notified = Arc::new(AtomicBool::new(read_log.is_empty()));
+
+        // Register in the wait queues.
+        if !read_log.is_empty() {
+            let locks = read_log
+                .iter()
+                .map(|(_, lvar)| lvar.svar.queue.lock().unwrap())
+                .collect::<Vec<_>>();
+
+            for mut lock in locks {
+                lock.push((thread::current(), notified.clone()));
+            }
+        }
+
+        loop {
+            thread::park_timeout(self.empty_retry_wait_timeout);
+            if notified.load(Ordering::Acquire) {
+                break;
+            }
+        }
+    }
+
+    /// Unpark any thread waiting on any of the modified `TVar`s.
+    fn notify(self) {
+        let write_log = self
+            .sorted_log()
+            .into_iter()
+            .filter(|(_, lvar)| lvar.write)
+            .collect::<Vec<_>>();
+
+        if !write_log.is_empty() {
+            let locks = write_log
+                .iter()
+                .map(|(_, lvar)| lvar.svar.queue.lock().unwrap());
+
+            for mut lock in locks {
+                let queue = mem::replace(&mut *lock, Vec::new());
+                for (thread, notified) in queue {
+                    notified.store(true, Ordering::SeqCst);
+                    thread.unpark();
+                }
+            }
         }
     }
 }
@@ -450,12 +390,25 @@ mod test {
     use std::time::Duration;
 
     #[test]
-    fn basics() {
-        let stm = STM::new();
-        let ta = stm.new_tvar(&1);
-        let tb = stm.new_tvar(&vec![1, 2, 3]);
+    fn next_version_increments() {
+        let a = next_version();
+        let b = next_version();
+        assert!(b > a)
+    }
 
-        let (a0, b0) = stm.atomically(|tx| {
+    #[test]
+    fn id_increments() {
+        let a = TVar::new(42);
+        let b = TVar::new(42);
+        assert!(b.id > a.id)
+    }
+
+    #[test]
+    fn basics() {
+        let ta = TVar::new(1);
+        let tb = TVar::new(vec![1, 2, 3]);
+
+        let (a0, b0) = atomically(|tx| {
             let a = ta.read(tx)?;
             let b = tb.read(tx)?;
             let mut b1 = b.as_ref().clone();
@@ -467,21 +420,19 @@ mod test {
         assert_eq!(*a0, 1);
         assert_eq!(*b0, vec![1, 2, 3]);
 
-        let b1 = stm.atomically(|tx| tb.read(tx));
+        let b1 = atomically(|tx| tb.read(tx));
         assert_eq!(*b1, vec![1, 2, 3, 4]);
     }
 
     #[test]
     fn conflict() {
-        let stm = Arc::new(STM::new());
-        let ta = stm.new_tvar(&1);
+        let ta = Arc::new(TVar::new(1));
 
         // Need to clone for the other thread.
-        let stmc = stm.clone(); // For the other thread.
         let tac = ta.clone();
 
         let t = thread::spawn(move || {
-            stmc.atomically(|tx| {
+            atomically(|tx| {
                 let a = tac.read(tx)?;
                 thread::sleep(Duration::from_millis(100));
                 Ok(a)
@@ -489,7 +440,7 @@ mod test {
         });
 
         thread::sleep(Duration::from_millis(50));
-        stm.atomically(|tx| ta.update(tx, |x| x + 1));
+        atomically(|tx| ta.update(tx, |x| x + 1));
 
         let a = t.join().unwrap();
 
@@ -498,11 +449,10 @@ mod test {
 
     #[test]
     fn or() {
-        let stm = STM::new();
-        let ta = stm.new_tvar(&1);
-        let tb = stm.new_tvar(&"Hello");
+        let ta = TVar::new(1);
+        let tb = TVar::new("Hello");
 
-        let (a, b) = stm.atomically(|tx| {
+        let (a, b) = atomically(|tx| {
             tb.write(tx, "World")?;
             tx.or(
                 |tx| {
@@ -519,15 +469,13 @@ mod test {
 
     #[test]
     fn retry_wait_notify() {
-        let stm = Arc::new(STM::new());
-        let stmc = stm.clone();
-        let ta = stm.new_tvar(&1);
+        let ta = Arc::new(TVar::new(1));
         let tac = ta.clone();
 
         let (sender, receiver) = mpsc::channel();
 
         thread::spawn(move || {
-            let a = stmc.atomically(|tx| {
+            let a = atomically(|tx| {
                 let a = tac.read(tx)?;
                 guard(*a > 1)?;
                 Ok(a)
@@ -535,10 +483,10 @@ mod test {
             sender.send(*a).unwrap()
         });
 
-        thread::sleep(Duration::from_millis(100));
-        stm.atomically(|tx| ta.write(tx, 2));
+        thread::sleep(Duration::from_millis(250));
+        atomically(|tx| ta.write(tx, 2));
 
-        let a = receiver.recv_timeout(Duration::from_millis(100)).unwrap();
+        let a = receiver.recv_timeout(Duration::from_millis(500)).unwrap();
         assert_eq!(a, 2);
     }
 }

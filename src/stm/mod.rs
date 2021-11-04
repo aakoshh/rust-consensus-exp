@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::thread::Thread;
@@ -370,11 +371,18 @@ impl Transaction {
                 .iter()
                 .map(|(_, lvar)| lvar.svar.queue.lock().unwrap());
 
+            // Only unpark a thread once per transaction, even if it waited on multiple vars.
+            let mut unparked = HashSet::new();
+
             for mut lock in locks {
                 let queue = mem::replace(&mut *lock, Vec::new());
                 for (thread, notified) in queue {
+                    if unparked.contains(&thread.id()) {
+                        continue;
+                    }
                     notified.store(true, Ordering::SeqCst);
                     thread.unpark();
+                    unparked.insert(thread.id());
                 }
             }
         }

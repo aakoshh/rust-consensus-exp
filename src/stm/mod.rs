@@ -11,6 +11,8 @@ use std::{
 };
 use std::{mem, thread};
 
+mod queues;
+
 pub enum STMError {
     /// The transaction failed because a value changed.
     /// It can be retried straight away.
@@ -108,6 +110,10 @@ impl<T: Any + Sync + Send + Clone> TVar<T> {
             }),
             phantom: PhantomData,
         }
+    }
+
+    pub fn read_clone(&self, tx: &mut Transaction) -> STMResult<T> {
+        tx.read_tvar(self).map(|r| r.as_ref().clone())
     }
 
     pub fn read(&self, tx: &mut Transaction) -> STMResult<Arc<T>> {

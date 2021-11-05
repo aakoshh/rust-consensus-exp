@@ -95,21 +95,26 @@ mod test {
             let queue1 = mq();
             let queue2 = queue1.clone();
 
-            let t1 = thread::spawn(move || {
+            let (sender1, receiver1) = mpsc::channel();
+            let (sender2, receiver2) = mpsc::channel();
+
+            thread::spawn(move || {
                 for i in 1..n {
                     atomically(|tx| queue1.write(tx, i));
                 }
+                sender1.send(()).unwrap();
             });
 
-            let t2 = thread::spawn(move || {
+            thread::spawn(move || {
                 for i in 1..n {
                     let r = atomically(|tx| queue2.read(tx));
                     assert_eq!(i, r);
                 }
+                sender2.send(()).unwrap();
             });
 
-            t1.join().unwrap();
-            t2.join().unwrap();
+            receiver1.recv_timeout(Duration::from_secs(10)).unwrap();
+            receiver2.recv_timeout(Duration::from_secs(10)).unwrap();
         });
     }
 
@@ -193,10 +198,10 @@ macro_rules! test_queue_mod {
             use etest::Bencher;
 
             // TODO: All except TQueue hang on this.
-            // #[bench]
-            // fn two_threads_read_write(b: &mut Bencher) {
-            //     tq::bench_two_threads_read_write(b, $make);
-            // }
+            #[bench]
+            fn two_threads_read_write(b: &mut Bencher) {
+                tq::bench_two_threads_read_write(b, $make);
+            }
 
             #[bench]
             fn one_thread_write_many_then_read(b: &mut Bencher) {

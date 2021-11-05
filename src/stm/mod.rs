@@ -491,7 +491,6 @@ impl Transaction {
 
 #[cfg(test)]
 mod test {
-
     use super::*;
     use std::sync::mpsc;
     use std::thread;
@@ -631,5 +630,44 @@ mod test {
     #[should_panic]
     fn write_outside_atomically() {
         let _ = TVar::new(0).write(1);
+    }
+
+    #[test]
+    fn nested_abort() {
+        let r = TVar::new(0);
+        let show = |label| Ok(println!("{}: r = {}", label, r.read()?));
+        let add1 = |x: &i32| x + 1;
+        let abort = || retry();
+
+        fn nested<F>(f: F) -> STMResult<()>
+        where
+            F: FnOnce() -> STMResult<()>,
+        {
+            or(f, || Ok(()))
+        }
+
+        let v = atomically(|| {
+            show('a')?; // 0
+            r.update(add1)?;
+            show('b')?; // 1
+            nested(|| {
+                show('c')?; // still 1
+                r.update(add1)?;
+                show('d')?; // 2
+                abort()
+            })?;
+            show('e')?; // back to 1 because abort
+            nested(|| {
+                show('f')?; // still 1
+                r.update(add1)?;
+                show('g') // 2
+            })?;
+            show('h')?; // 2
+            r.update(add1)?;
+            show('i')?; // 3
+            r.read()
+        });
+
+        assert_eq!(*v, 3);
     }
 }

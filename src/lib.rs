@@ -1,6 +1,9 @@
 #![allow(dead_code)]
 #![feature(associated_type_defaults)]
 #![feature(option_zip)]
+// For benchmarks.
+#![feature(test)]
+extern crate test as etest;
 
 use std::cmp::Ordering;
 use std::rc::Rc;

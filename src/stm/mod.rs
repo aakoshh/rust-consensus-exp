@@ -12,6 +12,8 @@ use std::{
 };
 use std::{mem, thread};
 
+mod queues;
+
 pub enum STMError {
     /// The transaction failed because a value changed.
     /// It can be retried straight away.
@@ -60,11 +62,18 @@ impl VVar {
     }
 }
 
+struct WaitQueue {
+    /// Store the last version which was written to avoid race condition where the notification
+    /// happens before the waiters would subscribe and then there's no further event.
+    last_written_version: Version,
+    /// Threads with their notifications flags that wait for the `TVar` to get an update.
+    queue: Vec<(Thread, Arc<AtomicBool>)>,
+}
+
 /// Sync variable, hold the committed value and the waiting threads.
 struct SVar {
     vvar: RwLock<VVar>,
-    /// Threads with their notifications flags that wait for the `TVar` to get an update.
-    queue: Mutex<Vec<(Thread, Arc<AtomicBool>)>>,
+    waiting: Mutex<WaitQueue>,
 }
 
 /// A variable in the transaction log that remembers if it has been read and/or written to.
@@ -105,10 +114,18 @@ impl<T: Any + Sync + Send + Clone> TVar<T> {
                     version: Default::default(),
                     value: Arc::new(value),
                 }),
-                queue: Mutex::new(Vec::new()),
+                waiting: Mutex::new(WaitQueue {
+                    last_written_version: Default::default(),
+                    queue: Vec::new(),
+                }),
             }),
             phantom: PhantomData,
         }
+    }
+
+    /// Read the value of the `TVar` as a clone, for subsequent modification. Only call this inside `atomically`.
+    pub fn read_clone(&self) -> STMResult<T> {
+        with_tx(|tx| tx.read(self).map(|r| r.as_ref().clone()))
     }
 
     /// Read the value of the `TVar`. Only call this inside `atomically`.
@@ -230,8 +247,8 @@ where
             let tx = tref.borrow_mut().take().unwrap();
             match result {
                 Ok(value) => {
-                    if tx.commit() {
-                        tx.notify();
+                    if let Some(version) = tx.commit() {
+                        tx.notify(version);
                         Some(value)
                     } else {
                         None
@@ -371,7 +388,7 @@ impl Transaction {
     /// In a critical section, check that every variable we have read/written
     /// hasn't got a higher version number in the committed store.
     /// If so, add all written values to the store.
-    fn commit(&self) -> bool {
+    fn commit(&self) -> Option<Version> {
         // Acquire write locks to all `SVar`s in the transaction.
         let log = self.sorted_log();
 
@@ -385,7 +402,7 @@ impl Transaction {
             .any(|(lvar, lock)| lock.version > lvar.vvar.version);
 
         if has_conflict {
-            false
+            None
         } else {
             let commit_version = next_version();
             for (lvar, mut lock) in locks {
@@ -394,7 +411,7 @@ impl Transaction {
                     lock.value = lvar.vvar.value.clone();
                 }
             }
-            true
+            Some(commit_version)
         }
     }
 
@@ -414,16 +431,25 @@ impl Transaction {
         if !read_log.is_empty() {
             let locks = read_log
                 .iter()
-                .map(|(_, lvar)| lvar.svar.queue.lock().unwrap())
+                .map(|(_, lvar)| lvar.svar.waiting.lock().unwrap())
                 .collect::<Vec<_>>();
 
+            // Don't register if a producer already committed changes by the time we got here.
+            let has_updates = locks
+                .iter()
+                .any(|lock| lock.last_written_version > self.version);
+
+            if has_updates {
+                return;
+            }
+
             for mut lock in locks {
-                lock.push((thread::current(), notified.clone()));
+                lock.queue.push((thread::current(), notified.clone()));
             }
         }
 
         loop {
-            thread::park_timeout(self.empty_retry_wait_timeout);
+            thread::park_timeout(Duration::from_secs(1));
             if notified.load(Ordering::Acquire) {
                 break;
             }
@@ -431,7 +457,7 @@ impl Transaction {
     }
 
     /// Unpark any thread waiting on any of the modified `TVar`s.
-    fn notify(self) {
+    fn notify(self, commit_version: Version) {
         let write_log = self
             .sorted_log()
             .into_iter()
@@ -441,13 +467,15 @@ impl Transaction {
         if !write_log.is_empty() {
             let locks = write_log
                 .iter()
-                .map(|(_, lvar)| lvar.svar.queue.lock().unwrap());
+                .map(|(_, lvar)| lvar.svar.waiting.lock().unwrap());
 
             // Only unpark a thread once per transaction, even if it waited on multiple vars.
             let mut unparked = HashSet::new();
 
             for mut lock in locks {
-                let queue = mem::replace(&mut *lock, Vec::new());
+                lock.last_written_version = commit_version;
+
+                let queue = mem::replace(&mut lock.queue, Vec::new());
                 for (thread, notified) in queue {
                     if unparked.contains(&thread.id()) {
                         continue;

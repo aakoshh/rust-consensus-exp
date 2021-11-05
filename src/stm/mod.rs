@@ -1,9 +1,8 @@
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::thread::Thread;
+use std::thread::{Thread, ThreadId};
 use std::time::Duration;
 use std::{
     collections::HashMap,
@@ -67,13 +66,13 @@ struct WaitQueue {
     /// happens before the waiters would subscribe and then there's no further event.
     last_written_version: Version,
     /// Threads with their notifications flags that wait for the `TVar` to get an update.
-    queue: Vec<(Thread, Arc<AtomicBool>)>,
+    waiting: HashMap<ThreadId, (Thread, Arc<AtomicBool>)>,
 }
 
 /// Sync variable, hold the committed value and the waiting threads.
 struct SVar {
     vvar: RwLock<VVar>,
-    waiting: Mutex<WaitQueue>,
+    queue: Mutex<WaitQueue>,
 }
 
 /// A variable in the transaction log that remembers if it has been read and/or written to.
@@ -114,9 +113,9 @@ impl<T: Any + Sync + Send + Clone> TVar<T> {
                     version: Default::default(),
                     value: Arc::new(value),
                 }),
-                waiting: Mutex::new(WaitQueue {
+                queue: Mutex::new(WaitQueue {
                     last_written_version: Default::default(),
-                    queue: Vec::new(),
+                    waiting: HashMap::new(),
                 }),
             }),
             phantom: PhantomData,
@@ -426,12 +425,13 @@ impl Transaction {
 
         // If there are no variables subscribed to then just wait a bit.
         let notified = Arc::new(AtomicBool::new(read_log.is_empty()));
+        let thread_id = thread::current().id();
 
         // Register in the wait queues.
         if !read_log.is_empty() {
             let locks = read_log
                 .iter()
-                .map(|(_, lvar)| lvar.svar.waiting.lock().unwrap())
+                .map(|(_, lvar)| lvar.svar.queue.lock().unwrap())
                 .collect::<Vec<_>>();
 
             // Don't register if a producer already committed changes by the time we got here.
@@ -444,16 +444,24 @@ impl Transaction {
             }
 
             for mut lock in locks {
-                lock.queue.push((thread::current(), notified.clone()));
+                lock.waiting
+                    .insert(thread_id, (thread::current(), notified.clone()));
             }
         }
 
         loop {
-            thread::park_timeout(Duration::from_secs(1));
+            thread::park_timeout(self.empty_retry_wait_timeout);
             if notified.load(Ordering::Acquire) {
                 break;
             }
         }
+
+        // NOTE: Here we could deregister from the wait queues, but that would require
+        // taking out the locks again. Since the notifiers take locks too to increment
+        // the version, let them do the clean up. One side effect is that a thread
+        // may be unparked some variable that changes less frequently, which still
+        // remembers it with an obsolete notification flag. In this case the thread
+        // will just park itself again.
     }
 
     /// Unpark any thread waiting on any of the modified `TVar`s.
@@ -464,27 +472,31 @@ impl Transaction {
             .filter(|(_, lvar)| lvar.write)
             .collect::<Vec<_>>();
 
+        // Only unpark threads at the end, to make sure they the most recent flag.
+        let mut unpark = HashMap::new();
+
         if !write_log.is_empty() {
             let locks = write_log
                 .iter()
-                .map(|(_, lvar)| lvar.svar.waiting.lock().unwrap());
-
-            // Only unpark a thread once per transaction, even if it waited on multiple vars.
-            let mut unparked = HashSet::new();
+                .map(|(_, lvar)| lvar.svar.queue.lock().unwrap());
 
             for mut lock in locks {
                 lock.last_written_version = commit_version;
+                if lock.waiting.is_empty() {
+                    continue;
+                }
 
-                let queue = mem::replace(&mut lock.queue, Vec::new());
-                for (thread, notified) in queue {
-                    if unparked.contains(&thread.id()) {
-                        continue;
-                    }
-                    notified.store(true, Ordering::SeqCst);
-                    thread.unpark();
-                    unparked.insert(thread.id());
+                let waiting = mem::replace(&mut lock.waiting, HashMap::new());
+
+                for (thread_id, (thread, notified)) in waiting {
+                    notified.store(true, Ordering::Release);
+                    unpark.insert(thread_id, thread);
                 }
             }
+        }
+
+        for (_, thread) in unpark {
+            thread.unpark();
         }
     }
 }

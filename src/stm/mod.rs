@@ -35,7 +35,7 @@ type Version = u64;
 /// Get and increment the vector clock.
 fn next_version() -> Version {
     static VERSION: AtomicU64 = AtomicU64::new(0);
-    VERSION.fetch_add(1, Ordering::SeqCst)
+    VERSION.fetch_add(1, Ordering::Relaxed)
 }
 
 /// The value can be read by many threads, so it has to be tracked by an `Arc`.

@@ -1,13 +1,13 @@
+use parking_lot::{Mutex, RwLock};
 use std::any::Any;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
 use std::thread::{Thread, ThreadId};
 use std::time::Duration;
 use std::{
     collections::HashMap,
     marker::PhantomData,
-    sync::{atomic::AtomicU64, Arc, RwLock},
+    sync::{atomic::AtomicU64, Arc},
 };
 use std::{mem, thread};
 
@@ -328,7 +328,7 @@ impl Transaction {
         match self.log.get(&tvar.id) {
             Some(lvar) => Ok(lvar.vvar.downcast()),
             None => {
-                let guard = tvar.svar.vvar.read().unwrap();
+                let guard = tvar.svar.vvar.read();
                 if guard.version >= self.version {
                     // The TVar has been written to since we started this transaction.
                     // There is no point carrying on with the rest of it, but we can retry.
@@ -393,7 +393,7 @@ impl Transaction {
 
         let locks = log
             .iter()
-            .map(|(_, lvar)| (lvar, lvar.svar.vvar.write().unwrap()))
+            .map(|(_, lvar)| (lvar, lvar.svar.vvar.write()))
             .collect::<Vec<_>>();
 
         let has_conflict = locks
@@ -431,7 +431,7 @@ impl Transaction {
         if !read_log.is_empty() {
             let locks = read_log
                 .iter()
-                .map(|(_, lvar)| lvar.svar.queue.lock().unwrap())
+                .map(|(_, lvar)| lvar.svar.queue.lock())
                 .collect::<Vec<_>>();
 
             // Don't register if a producer already committed changes by the time we got here.
@@ -476,9 +476,7 @@ impl Transaction {
         let mut unpark = HashMap::new();
 
         if !write_log.is_empty() {
-            let locks = write_log
-                .iter()
-                .map(|(_, lvar)| lvar.svar.queue.lock().unwrap());
+            let locks = write_log.iter().map(|(_, lvar)| lvar.svar.queue.lock());
 
             for mut lock in locks {
                 lock.last_written_version = commit_version;

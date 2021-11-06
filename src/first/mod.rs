@@ -3,11 +3,10 @@ mod fsm;
 #[cfg(test)]
 mod test;
 
-use std::{collections::HashSet, marker::PhantomData};
+use std::{collections::HashSet, marker::PhantomData, sync::Arc};
 
 use crate::{Effect, Paxos, PaxosInstance, PaxosMessage, PaxosMessageDetail, Vote};
 use fsm::{FSMResult, FSM};
-use std::rc::Rc;
 
 type Result<P> = FSMResult<PaxosInstance<P>, Effect<P>>;
 
@@ -43,7 +42,7 @@ impl<P: Paxos + Clone> PFSM<P> {
         Ok((Some(inst), effects))
     }
 
-    fn handle_request(state: &PaxosInstance<P>, value: Rc<P::Value>) -> Result<P> {
+    fn handle_request(state: &PaxosInstance<P>, value: Arc<P::Value>) -> Result<P> {
         // Making a clone because the ballot ordinal will be incremented in all cases.
         let mut inst: PaxosInstance<P> = state.clone();
         inst.max_ballot_ordinal = inst.max_ballot_ordinal.incr(inst.my_pid);
@@ -207,11 +206,11 @@ impl<P: Paxos + Clone> PFSM<P> {
         }
     }
 
-    fn send_propose(inst: &PaxosInstance<P>, value: Rc<P::Value>) -> Effect<P> {
+    fn send_propose(inst: &PaxosInstance<P>, value: Arc<P::Value>) -> Effect<P> {
         PFSM::send_all(inst, PaxosMessageDetail::Propose(value))
     }
 
-    fn send_accept(inst: &PaxosInstance<P>, value: Rc<P::Value>) -> Effect<P> {
+    fn send_accept(inst: &PaxosInstance<P>, value: Arc<P::Value>) -> Effect<P> {
         PFSM::send_all(inst, PaxosMessageDetail::Accept(value))
     }
 

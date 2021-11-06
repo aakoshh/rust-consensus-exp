@@ -11,7 +11,7 @@ use std::{
 };
 use std::{mem, thread};
 
-mod queues;
+pub mod queues;
 
 pub enum STMError {
     /// The transaction failed because a value changed.
@@ -23,7 +23,7 @@ pub enum STMError {
     Retry,
 }
 
-type STMResult<T> = Result<T, STMError>;
+pub type STMResult<T> = Result<T, STMError>;
 
 /// Unique ID for a `TVar`.
 type ID = u64;

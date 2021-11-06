@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use super::fsm::*;
 use super::PFSM;
@@ -16,6 +16,37 @@ impl Paxos for TestPaxos {
     type Value = String;
 }
 
+fn msg_desc(msg: &PaxosMessage<TestPaxos>) -> String {
+    match &msg.detail {
+        PaxosMessageDetail::Prepare => format!(
+            "1a Prepare({}/{})",
+            msg.ballot_ordinal.pid, msg.ballot_ordinal.round
+        ),
+
+        PaxosMessageDetail::Promise(vote) => format!(
+            "1b Promise({}/{}, {:?}, {:?})",
+            msg.ballot_ordinal.pid,
+            msg.ballot_ordinal.round,
+            vote.as_ref().map(|v| v.ord.round),
+            vote.as_ref().map(|v| v.value.as_ref())
+        ),
+
+        PaxosMessageDetail::Propose(value) => format!(
+            "2a Propose({}/{}, \"{}\")",
+            msg.ballot_ordinal.pid,
+            msg.ballot_ordinal.round,
+            value.as_ref()
+        ),
+
+        PaxosMessageDetail::Accept(value) => format!(
+            "2b Accept({}/{}, \"{}\")",
+            msg.ballot_ordinal.pid,
+            msg.ballot_ordinal.round,
+            value.as_ref()
+        ),
+    }
+}
+
 #[test]
 fn runner() {
     let pids = vec![1, 2, 3];
@@ -29,37 +60,6 @@ fn runner() {
             println!("{}", s);
         }
     };
-
-    fn msg_desc(msg: &PaxosMessage<TestPaxos>) -> String {
-        match &msg.detail {
-            PaxosMessageDetail::Prepare => format!(
-                "1a Prepare({}/{})",
-                msg.ballot_ordinal.pid, msg.ballot_ordinal.round
-            ),
-
-            PaxosMessageDetail::Promise(vote) => format!(
-                "1b Promise({}/{}, {:?}, {:?})",
-                msg.ballot_ordinal.pid,
-                msg.ballot_ordinal.round,
-                vote.as_ref().map(|v| v.ord.round),
-                vote.as_ref().map(|v| v.value.as_ref())
-            ),
-
-            PaxosMessageDetail::Propose(value) => format!(
-                "2a Propose({}/{}, \"{}\")",
-                msg.ballot_ordinal.pid,
-                msg.ballot_ordinal.round,
-                value.as_ref()
-            ),
-
-            PaxosMessageDetail::Accept(value) => format!(
-                "2b Accept({}/{}, \"{}\")",
-                msg.ballot_ordinal.pid,
-                msg.ballot_ordinal.round,
-                value.as_ref()
-            ),
-        }
-    }
 
     uml("@startuml");
     for pid in &pids {
@@ -79,11 +79,11 @@ fn runner() {
         VecDeque::from([
             (
                 1,
-                Event::RequestReceived(Rc::new("Agree on this!".to_owned())),
+                Event::RequestReceived(Arc::new("Agree on this!".to_owned())),
             ),
             (
                 2,
-                Event::RequestReceived(Rc::new("Or maybe this?".to_owned())),
+                Event::RequestReceived(Arc::new("Or maybe this?".to_owned())),
             ),
         ]),
         |effect: Effect<TestPaxos>| match effect {

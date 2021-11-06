@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(type_alias_bounds)]
 #![feature(associated_type_defaults)]
 #![feature(option_zip)]
 // For benchmarks.
@@ -6,15 +7,17 @@
 extern crate test as etest;
 
 use std::cmp::Ordering;
-use std::rc::Rc;
+use std::fmt::Debug;
+use std::sync::Arc;
 use std::{collections::HashSet, hash::Hash};
 
 mod first;
+mod second;
 mod stm;
 
 trait Paxos {
-    type Pid: Copy + PartialEq + Eq + Hash + PartialOrd + std::fmt::Debug;
-    type Value: Clone + std::fmt::Debug;
+    type Pid: Copy + PartialEq + Eq + Hash + PartialOrd + Debug + Sync + Send;
+    type Value: Clone + Debug + Sync + Send;
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -39,12 +42,12 @@ impl<P: PartialOrd> PartialOrd for BallotOrdinal<P> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Eq, Hash)]
 struct InstanceId(u64);
 
 #[derive(Clone, Debug)]
 struct Vote<P: Paxos> {
-    value: Rc<P::Value>,
+    value: Arc<P::Value>,
     ord: BallotOrdinal<P::Pid>,
 }
 
@@ -55,7 +58,7 @@ struct PaxosInstance<P: Paxos> {
     members: HashSet<P::Pid>,
     max_ballot_ordinal: BallotOrdinal<P::Pid>,
     vote: Option<Vote<P>>,
-    requested_value: Option<Rc<P::Value>>,
+    requested_value: Option<Arc<P::Value>>,
     safe_value_vote: Option<Vote<P>>,
     promises: HashSet<P::Pid>,
     accepting_vote: Option<Vote<P>>,
@@ -100,13 +103,14 @@ struct PaxosMessage<P: Paxos> {
 enum PaxosMessageDetail<P: Paxos> {
     Prepare,
     Promise(Option<Vote<P>>),
-    Propose(Rc<P::Value>),
-    Accept(Rc<P::Value>),
+    Propose(Arc<P::Value>),
+    Accept(Arc<P::Value>),
 }
 
+#[derive(Clone)]
 enum Event<P: Paxos> {
     /// A client requested a value to be proposed.
-    RequestReceived(Rc<P::Value>),
+    RequestReceived(Arc<P::Value>),
     /// Message from a participant.
     MessageReceived(PaxosMessage<P>),
 }
@@ -114,4 +118,10 @@ enum Event<P: Paxos> {
 enum Effect<P: Paxos> {
     Broadcast { msg: PaxosMessage<P> },
     Unicast { to: P::Pid, msg: PaxosMessage<P> },
+}
+
+struct ClientRequest<P: Paxos> {
+    instance_id: InstanceId,
+    members: HashSet<P::Pid>,
+    value: P::Value,
 }

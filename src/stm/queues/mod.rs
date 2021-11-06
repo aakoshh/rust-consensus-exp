@@ -1,7 +1,7 @@
-mod tbqueue;
-mod tchan;
-mod tqueue;
-mod tvecdequeue;
+pub mod tbqueue;
+pub mod tchan;
+pub mod tqueue;
+pub mod tvecdequeue;
 
 use crate::stm::STMResult;
 

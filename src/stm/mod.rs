@@ -302,6 +302,8 @@ pub struct Transaction {
     /// so it doesn't need to be wrapped in an `Arc`. We have exclusive access through
     /// the mutable reference to the transaction.
     log: HashMap<ID, LVar>,
+    /// A read-only transaction can be committed without taking out locks a second time.
+    has_writes: bool,
     /// Time to wait during retries if no variables have been
     /// read by the transaction. This would be strange, but
     /// it's better than blocking a thread forever.
@@ -316,6 +318,7 @@ impl Transaction {
             // another starts at.
             version: next_version(),
             log: HashMap::new(),
+            has_writes: false,
             empty_retry_wait_timeout: Duration::from_secs(60),
         }
     }
@@ -373,6 +376,7 @@ impl Transaction {
                 );
             }
         };
+        self.has_writes = true;
         Ok(())
     }
 
@@ -388,30 +392,44 @@ impl Transaction {
     /// hasn't got a higher version number in the committed store.
     /// If so, add all written values to the store.
     fn commit(&self) -> Option<Version> {
-        // Acquire write locks to all `SVar`s in the transaction.
+        // If there were no writes, then the read would have already detected conflicts when their
+        // values were retrieved. We can go ahead and just return without locking again.
+        if !self.has_writes {
+            return Some(self.version);
+        }
+
+        // Acquire write locks to all values written in the transaction, read locks for the rest,
+        // but do this in the deterministic order of IDs to avoid deadlocks.
+        let mut write_locks = Vec::new();
+        let mut read_locks = Vec::new();
         let log = self.sorted_log();
 
-        let locks = log
-            .iter()
-            .map(|(_, lvar)| (lvar, lvar.svar.vvar.write()))
-            .collect::<Vec<_>>();
-
-        let has_conflict = locks
-            .iter()
-            .any(|(lvar, lock)| lock.version > lvar.vvar.version);
-
-        if has_conflict {
-            None
-        } else {
-            let commit_version = next_version();
-            for (lvar, mut lock) in locks {
-                if lvar.write {
-                    lock.version = commit_version;
-                    lock.value = lvar.vvar.value.clone();
+        for (_, lvar) in log {
+            if lvar.write {
+                let lock = lvar.svar.vvar.write();
+                if lock.version > lvar.vvar.version {
+                    return None;
                 }
+                write_locks.push((lvar, lock));
+            } else {
+                let lock = lvar.svar.vvar.read();
+                if lock.version > lvar.vvar.version {
+                    return None;
+                }
+                read_locks.push(lock);
             }
-            Some(commit_version)
         }
+
+        // Incrementing after locks are taken; if it only differs by one, no other transaction took place;
+        // but we already checked for conflicts, it looks like at this point there's no way to use this info.
+        let commit_version = next_version();
+
+        for (lvar, mut lock) in write_locks {
+            lock.version = commit_version;
+            lock.value = lvar.vvar.value.clone();
+        }
+
+        Some(commit_version)
     }
 
     /// For each variable that the transaction has read, subscribe to future
@@ -466,6 +484,10 @@ impl Transaction {
 
     /// Unpark any thread waiting on any of the modified `TVar`s.
     fn notify(self, commit_version: Version) {
+        if !self.has_writes {
+            return;
+        }
+
         let write_log = self
             .sorted_log()
             .into_iter()
@@ -475,21 +497,19 @@ impl Transaction {
         // Only unpark threads at the end, to make sure they the most recent flag.
         let mut unpark = HashMap::new();
 
-        if !write_log.is_empty() {
-            let locks = write_log.iter().map(|(_, lvar)| lvar.svar.queue.lock());
+        let locks = write_log.iter().map(|(_, lvar)| lvar.svar.queue.lock());
 
-            for mut lock in locks {
-                lock.last_written_version = commit_version;
-                if lock.waiting.is_empty() {
-                    continue;
-                }
+        for mut lock in locks {
+            lock.last_written_version = commit_version;
+            if lock.waiting.is_empty() {
+                continue;
+            }
 
-                let waiting = mem::replace(&mut lock.waiting, HashMap::new());
+            let waiting = mem::replace(&mut lock.waiting, HashMap::new());
 
-                for (thread_id, (thread, notified)) in waiting {
-                    notified.store(true, Ordering::Release);
-                    unpark.insert(thread_id, thread);
-                }
+            for (thread_id, (thread, notified)) in waiting {
+                notified.store(true, Ordering::Release);
+                unpark.insert(thread_id, thread);
             }
         }
 
@@ -542,10 +562,29 @@ mod test {
     }
 
     #[test]
-    fn conflict() {
+    fn conflict_if_written_after_start() {
         let ta = Arc::new(TVar::new(1));
+        let tac = ta.clone();
 
-        // Need to clone for the other thread.
+        let t = thread::spawn(move || {
+            atomically(|| {
+                thread::sleep(Duration::from_millis(100));
+                tac.read()
+            })
+        });
+
+        thread::sleep(Duration::from_millis(50));
+        atomically(|| ta.update(|x| x + 1));
+
+        let a = t.join().unwrap();
+        // We have written a between the start of the transaction
+        // and the time it read the value, so it should have restarted.
+        assert_eq!(*a, 2);
+    }
+
+    #[test]
+    fn no_confict_if_read_before_write() {
+        let ta = Arc::new(TVar::new(1));
         let tac = ta.clone();
 
         let t = thread::spawn(move || {
@@ -560,8 +599,10 @@ mod test {
         atomically(|| ta.update(|x| x + 1));
 
         let a = t.join().unwrap();
-
-        assert_eq!(*a, 2);
+        // Even though we spent a lot of time after reading the value
+        // we didn't read anything else that changed, so it's a consistent
+        // state for the lengthy calculation that followed.
+        assert_eq!(*a, 1);
     }
 
     #[test]

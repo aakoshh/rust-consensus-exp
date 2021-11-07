@@ -11,9 +11,11 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use std::{collections::HashSet, hash::Hash};
 
+mod stm;
+
 mod first;
 mod second;
-mod stm;
+mod third;
 
 trait Paxos {
     type Pid: Copy + PartialEq + Eq + Hash + PartialOrd + Debug + Sync + Send;
@@ -120,6 +122,7 @@ enum Effect<P: Paxos> {
     Unicast { to: P::Pid, msg: PaxosMessage<P> },
 }
 
+#[derive(Clone)]
 struct ClientRequest<P: Paxos> {
     instance_id: InstanceId,
     members: HashSet<P::Pid>,

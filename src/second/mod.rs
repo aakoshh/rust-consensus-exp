@@ -125,6 +125,7 @@ where
                     for (_, q) in ps.as_ref() {
                         q.write(msg.clone())?;
                     }
+                    // TODO: Message to self.
                 }
 
                 Effect::Unicast { to, msg } => {

@@ -1,4 +1,4 @@
-mod fsm;
+pub mod fsm;
 
 #[cfg(test)]
 mod test;
@@ -10,7 +10,7 @@ use fsm::{FSMResult, FSM};
 
 type Result<P> = FSMResult<PaxosInstance<P>, Effect<P>>;
 
-struct PFSM<P: Paxos> {
+pub(crate) struct PFSM<P: Paxos> {
     phantom: PhantomData<P>,
 }
 
@@ -28,7 +28,7 @@ impl<P: Paxos + Clone> FSM for PFSM<P> {
 }
 
 impl<P: Paxos + Clone> PFSM<P> {
-    fn new() -> PFSM<P> {
+    pub fn new() -> PFSM<P> {
         PFSM {
             phantom: PhantomData,
         }

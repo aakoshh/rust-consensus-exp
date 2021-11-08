@@ -31,10 +31,18 @@ type ID = u64;
 /// MVCC version.
 type Version = u64;
 
-/// Get and increment the vector clock.
+/// Global vector clock.
+static VERSION: AtomicU64 = AtomicU64::new(0);
+
+/// Increment the global vector clock and return the new value.
 fn next_version() -> Version {
-    static VERSION: AtomicU64 = AtomicU64::new(0);
-    VERSION.fetch_add(1, Ordering::Relaxed)
+    let prev = VERSION.fetch_add(1, Ordering::Relaxed);
+    prev + 1
+}
+
+/// Get the current version of the vector clock.
+fn current_version() -> Version {
+    VERSION.load(Ordering::Relaxed)
 }
 
 /// The value can be read by many threads, so it has to be tracked by an `Arc`.
@@ -313,10 +321,7 @@ pub struct Transaction {
 impl Transaction {
     fn new() -> Transaction {
         Transaction {
-            // Increment the version when we start a new transaction, so we can always
-            // tell which one should get preference and nothing ends at the same time
-            // another starts at.
-            version: next_version(),
+            version: current_version(),
             log: HashMap::new(),
             has_writes: false,
             empty_retry_wait_timeout: Duration::from_secs(60),
@@ -332,7 +337,7 @@ impl Transaction {
             Some(lvar) => Ok(lvar.vvar.downcast()),
             None => {
                 let guard = tvar.svar.vvar.read();
-                if guard.version >= self.version {
+                if guard.version > self.version {
                     // The TVar has been written to since we started this transaction.
                     // There is no point carrying on with the rest of it, but we can retry.
                     Err(STMError::Failure)
@@ -367,6 +372,9 @@ impl Transaction {
                     LVar {
                         svar: tvar.svar.clone(),
                         vvar: VVar {
+                            // So we didn't bother reading the value before attempting to overwrite,
+                            // and therefore we don't know what version it had. Let's use the maximum
+                            // it could have had at the time of the transaction.
                             version: self.version,
                             value: Arc::new(value),
                         },

@@ -1,5 +1,5 @@
 use crate::stm::queues::{tqueue::TQueue, TQueueLike};
-use crate::stm::{atomically, STMResult, TVar};
+use crate::stm::{atomically, StmResult, TVar};
 use crate::{
     BallotOrdinal, ClientRequest, Effect, Event, InstanceId, Paxos, PaxosMessage,
     PaxosMessageDetail, Vote,
@@ -117,7 +117,7 @@ where
         }
     }
 
-    fn handle_effects(processes: ProcessRegistry<P>, effects: Vec<Effect<P>>) -> STMResult<()> {
+    fn handle_effects(processes: ProcessRegistry<P>, effects: Vec<Effect<P>>) -> StmResult<()> {
         let ps = processes.read()?;
         for effect in effects {
             match effect {
@@ -140,7 +140,7 @@ where
 }
 
 /// Allow returning error messages from the STM functions.
-type EventResult<P: Paxos> = STMResult<Result<Vec<Effect<P>>, String>>;
+type EventResult<P: Paxos> = StmResult<Result<Vec<Effect<P>>, String>>;
 
 #[derive(Clone)]
 struct PaxosInstance<P: Paxos + Clone> {
@@ -190,17 +190,17 @@ where
         Ok(Ok(effects))
     }
 
-    fn send_prepare(&self) -> STMResult<Effect<P>> {
+    fn send_prepare(&self) -> StmResult<Effect<P>> {
         self.send_all(PaxosMessageDetail::Prepare)
     }
 
-    fn send_all(&self, detail: PaxosMessageDetail<P>) -> STMResult<Effect<P>> {
+    fn send_all(&self, detail: PaxosMessageDetail<P>) -> StmResult<Effect<P>> {
         Ok(Effect::Broadcast {
             msg: self.make_msg(detail)?,
         })
     }
 
-    fn make_msg(&self, detail: PaxosMessageDetail<P>) -> STMResult<PaxosMessage<P>> {
+    fn make_msg(&self, detail: PaxosMessageDetail<P>) -> StmResult<PaxosMessage<P>> {
         let msg = PaxosMessage {
             src: self.my_pid,
             instance_id: self.id,

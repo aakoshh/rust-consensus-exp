@@ -1,5 +1,5 @@
 use super::TQueueLike;
-use crate::stm::{retry, STMResult, TVar};
+use crate::stm::{retry, StmResult, TVar};
 use crate::test_queue_mod;
 use std::any::Any;
 
@@ -32,13 +32,13 @@ impl<T> TQueueLike<T> for TQueue<T>
 where
     T: Any + Sync + Send + Clone,
 {
-    fn write(&self, value: T) -> STMResult<()> {
+    fn write(&self, value: T) -> StmResult<()> {
         let mut v = self.write.read_clone()?;
         v.push(value);
         self.write.write(v)
     }
 
-    fn read(&self) -> STMResult<T> {
+    fn read(&self) -> StmResult<T> {
         let mut rv = self.read.read_clone()?;
         // Elements are stored in reverse order.
         match rv.pop() {
@@ -61,7 +61,7 @@ where
         }
     }
 
-    fn is_empty(&self) -> STMResult<bool> {
+    fn is_empty(&self) -> StmResult<bool> {
         if self.read.read()?.is_empty() {
             Ok(self.write.read()?.is_empty())
         } else {

@@ -1,5 +1,5 @@
 use super::TQueueLike;
-use crate::stm::{retry, STMResult, TVar};
+use crate::stm::{retry, StmResult, TVar};
 use crate::test_queue_mod;
 use std::{any::Any, collections::VecDeque};
 
@@ -28,13 +28,13 @@ impl<T> TQueueLike<T> for TVecDequeue<T>
 where
     T: Any + Sync + Send + Clone,
 {
-    fn write(&self, value: T) -> STMResult<()> {
+    fn write(&self, value: T) -> StmResult<()> {
         let mut queue = self.queue.read_clone()?;
         queue.push_back(value);
         self.queue.write(queue)
     }
 
-    fn read(&self) -> STMResult<T> {
+    fn read(&self) -> StmResult<T> {
         let mut queue = self.queue.read_clone()?;
         match queue.pop_front() {
             None => retry(),
@@ -45,7 +45,7 @@ where
         }
     }
 
-    fn is_empty(&self) -> STMResult<bool> {
+    fn is_empty(&self) -> StmResult<bool> {
         self.queue.read().map(|v| v.is_empty())
     }
 }

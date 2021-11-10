@@ -3,18 +3,18 @@ pub mod tchan;
 pub mod tqueue;
 pub mod tvecdequeue;
 
-use crate::stm::STMResult;
+use crate::stm::StmResult;
 
 /// Transactional queue-like structure.
 ///
 /// This is a common interface between the various implementations in Simon Marlow's book.
 pub trait TQueueLike<T>: Clone + Send {
     /// Pop the head of the queue, or retry until there is an element if it's empty.
-    fn read(&self) -> STMResult<T>;
+    fn read(&self) -> StmResult<T>;
     /// Push to the end of the queue.
-    fn write(&self, value: T) -> STMResult<()>;
+    fn write(&self, value: T) -> StmResult<()>;
     /// Check if the queue is empty.
-    fn is_empty(&self) -> STMResult<bool>;
+    fn is_empty(&self) -> StmResult<bool>;
 }
 
 #[cfg(test)]

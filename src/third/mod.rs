@@ -1,7 +1,7 @@
 use crate::first::fsm::FSM;
 use crate::first::PFSM;
 use crate::stm::queues::{tqueue::TQueue, TQueueLike};
-use crate::stm::{atomically, or, STMResult, TVar};
+use crate::stm::{atomically, or, StmResult, TVar};
 use crate::{ClientRequest, Effect, Event, InstanceId, Paxos, PaxosInstance, PaxosMessage};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -19,7 +19,7 @@ struct PaxosService<P: Paxos, O> {
 
 impl<P: Paxos + Clone + Send + 'static, O: Send + 'static> PaxosService<P, O>
 where
-    O: Fn(P::Pid) -> STMResult<Option<TQueue<PaxosMessage<P>>>>,
+    O: Fn(P::Pid) -> StmResult<Option<TQueue<PaxosMessage<P>>>>,
     P::Pid: Default,
 {
     pub fn new(
@@ -62,7 +62,7 @@ where
         &self,
         id: InstanceId,
         members: &HashSet<P::Pid>,
-    ) -> STMResult<TVar<PaxosInstance<P>>> {
+    ) -> StmResult<TVar<PaxosInstance<P>>> {
         let insts = self.instances.read()?;
         match insts.get(&id) {
             None => {
@@ -78,17 +78,17 @@ where
         }
     }
 
-    fn handle_request(&self, request: ClientRequest<P>) -> STMResult<()> {
+    fn handle_request(&self, request: ClientRequest<P>) -> StmResult<()> {
         let inst = self.get_or_create_inst(request.instance_id, &request.members)?;
         self.handle_event(inst, Event::RequestReceived(Arc::new(request.value)))
     }
 
-    fn handle_message(&self, message: PaxosMessage<P>) -> STMResult<()> {
+    fn handle_message(&self, message: PaxosMessage<P>) -> StmResult<()> {
         let inst = self.get_or_create_inst(message.instance_id, &message.members)?;
         self.handle_event(inst, Event::MessageReceived(message))
     }
 
-    fn handle_event(&self, inst: TVar<PaxosInstance<P>>, event: Event<P>) -> STMResult<()> {
+    fn handle_event(&self, inst: TVar<PaxosInstance<P>>, event: Event<P>) -> StmResult<()> {
         let state = inst.read()?;
         match self.machine.update(state.as_ref(), event) {
             Ok((maybe_new_inst, effects)) => {
@@ -105,7 +105,7 @@ where
         }
     }
 
-    fn handle_effects(&self, effects: Vec<Effect<P>>) -> STMResult<()> {
+    fn handle_effects(&self, effects: Vec<Effect<P>>) -> StmResult<()> {
         for effect in effects {
             match effect {
                 Effect::Broadcast { msg } => {

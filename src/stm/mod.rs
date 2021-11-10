@@ -1,6 +1,7 @@
 use parking_lot::{Mutex, RwLock};
 use std::any::Any;
 use std::cell::RefCell;
+use std::error::Error;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{Thread, ThreadId};
 use std::time::Duration;
@@ -13,7 +14,7 @@ use std::{mem, thread};
 
 pub mod queues;
 
-pub enum STMError {
+pub enum StmError {
     /// The transaction failed because a value changed.
     /// It can be retried straight away.
     Failure,
@@ -21,9 +22,11 @@ pub enum STMError {
     /// to wait until at least one of the variables it
     /// read have changed, before being retried.
     Retry,
+    /// Abort the tranasction and return an error.
+    Abort(Box<dyn Error>),
 }
 
-pub type STMResult<T> = Result<T, STMError>;
+pub type StmResult<T> = Result<T, StmError>;
 
 /// Unique ID for a `TVar`.
 type ID = u64;
@@ -131,22 +134,22 @@ impl<T: Any + Sync + Send + Clone> TVar<T> {
     }
 
     /// Read the value of the `TVar` as a clone, for subsequent modification. Only call this inside `atomically`.
-    pub fn read_clone(&self) -> STMResult<T> {
+    pub fn read_clone(&self) -> StmResult<T> {
         with_tx(|tx| tx.read(self).map(|r| r.as_ref().clone()))
     }
 
     /// Read the value of the `TVar`. Only call this inside `atomically`.
-    pub fn read(&self) -> STMResult<Arc<T>> {
+    pub fn read(&self) -> StmResult<Arc<T>> {
         with_tx(|tx| tx.read(self))
     }
 
     /// Replace the value of the `TVar`. Oly call this inside `atomically`.
-    pub fn write(&self, value: T) -> STMResult<()> {
+    pub fn write(&self, value: T) -> StmResult<()> {
         with_tx(move |tx| tx.write(self, value))
     }
 
     /// Apply an update on the value of the `TVar`. Only call this inside `atomically`.
-    pub fn update<F>(&self, f: F) -> STMResult<()>
+    pub fn update<F>(&self, f: F) -> StmResult<()>
     where
         F: FnOnce(&T) -> T,
     {
@@ -155,7 +158,7 @@ impl<T: Any + Sync + Send + Clone> TVar<T> {
     }
 
     /// Apply an update on the value of the `TVar` and return a value. Only call this inside `atomically`.
-    pub fn modify<F, R>(&self, f: F) -> STMResult<R>
+    pub fn modify<F, R>(&self, f: F) -> StmResult<R>
     where
         F: FnOnce(&T) -> (T, R),
     {
@@ -166,7 +169,7 @@ impl<T: Any + Sync + Send + Clone> TVar<T> {
     }
 
     /// Replace the value of the `TVar` and return the previous value. Only call this inside `atomically`.
-    pub fn replace(&self, value: T) -> STMResult<Arc<T>> {
+    pub fn replace(&self, value: T) -> StmResult<Arc<T>> {
         let v = self.read()?;
         self.write(value)?;
         Ok(v)
@@ -174,17 +177,21 @@ impl<T: Any + Sync + Send + Clone> TVar<T> {
 }
 
 /// Abandon the transaction and retry after some of the variables read have changed.
-pub fn retry<T>() -> STMResult<T> {
-    Err(STMError::Retry)
+pub fn retry<T>() -> StmResult<T> {
+    Err(StmError::Retry)
 }
 
 /// Retry unless a given condition has been met.
-pub fn guard(cond: bool) -> STMResult<()> {
+pub fn guard(cond: bool) -> StmResult<()> {
     if cond {
         Ok(())
     } else {
         retry()
     }
+}
+
+pub fn abort<T, E: Error + 'static>(e: E) -> StmResult<T> {
+    Err(StmError::Abort(Box::new(e)))
 }
 
 /// Run the first function; if it returns a `Retry`,
@@ -194,22 +201,22 @@ pub fn guard(cond: bool) -> STMResult<()> {
 ///
 /// If they return `Failure` then just return that result,
 /// since the transaction can be retried right now.
-pub fn or<F, G, T>(f: F, g: G) -> STMResult<T>
+pub fn or<F, G, T>(f: F, g: G) -> StmResult<T>
 where
-    F: FnOnce() -> STMResult<T>,
-    G: FnOnce() -> STMResult<T>,
+    F: FnOnce() -> StmResult<T>,
+    G: FnOnce() -> StmResult<T>,
 {
     let mut snapshot = with_tx(|tx| tx.clone());
 
     match f() {
-        Err(STMError::Retry) => {
+        Err(StmError::Retry) => {
             // Restore the original transaction state.
             with_tx(|tx| {
                 mem::swap(tx, &mut snapshot);
             });
 
             match g() {
-                retry @ Err(STMError::Retry) =>
+                retry @ Err(StmError::Retry) =>
                 // Add any variable read in the first attempt.
                 {
                     with_tx(|tx| {
@@ -231,12 +238,23 @@ where
     }
 }
 
-/// Create a new transaction and run `f` until it retunrs a successful result and
-/// can be committed without running into version conflicts. Make sure `f` is free
-/// of any side effects.
+/// Create a new transaction and run `f` until it returns a successful result and
+/// can be committed without running into version conflicts.
+/// Make sure `f` is free of any side effects.
 pub fn atomically<F, T>(f: F) -> T
 where
-    F: Fn() -> STMResult<T>,
+    F: Fn() -> StmResult<T>,
+{
+    atomically_or_err(f).expect("Didn't expect `abort`. Use `atomically_or_err` instead.")
+}
+
+/// Create a new transaction and run `f` until it returns a successful result and
+/// can be committed without running into version conflicts, or until it returns
+/// an `Abort` in which case the contained error is returned.
+/// Make sure `f` is free of any side effects.
+pub fn atomically_or_err<F, T>(f: F) -> Result<T, Box<dyn Error>>
+where
+    F: Fn() -> StmResult<T>,
 {
     loop {
         TX.with(|tref| {
@@ -256,20 +274,21 @@ where
                 Ok(value) => {
                     if let Some(version) = tx.commit() {
                         tx.notify(version);
-                        Some(value)
+                        Some(Ok(value))
                     } else {
                         None
                     }
                 }
-                Err(STMError::Failure) => {
+                Err(StmError::Failure) => {
                     // We can retry straight away.
                     None
                 }
-                Err(STMError::Retry) => {
+                Err(StmError::Retry) => {
                     // Block this thread until there's a change.
                     tx.wait();
                     None
                 }
+                Err(StmError::Abort(e)) => Some(Err(e)),
             }
         }) {
             return value;
@@ -332,7 +351,7 @@ impl Transaction {
     /// If it has changed since the beginning of the transaction,
     /// return a failure immediately, because we are not reading
     /// a consistent snapshot.
-    pub fn read<T: Any + Sync + Send>(&mut self, tvar: &TVar<T>) -> STMResult<Arc<T>> {
+    pub fn read<T: Any + Sync + Send>(&mut self, tvar: &TVar<T>) -> StmResult<Arc<T>> {
         match self.log.get(&tvar.id) {
             Some(lvar) => Ok(lvar.vvar.downcast()),
             None => {
@@ -340,7 +359,7 @@ impl Transaction {
                 if guard.version > self.version {
                     // The TVar has been written to since we started this transaction.
                     // There is no point carrying on with the rest of it, but we can retry.
-                    Err(STMError::Failure)
+                    Err(StmError::Failure)
                 } else {
                     self.log.insert(
                         tvar.id,
@@ -360,7 +379,7 @@ impl Transaction {
     /// Write a value into the local store. If it has not been read
     /// before, just insert it with the version at the start of the
     /// transaction.
-    pub fn write<T: Any + Sync + Send>(&mut self, tvar: &TVar<T>, value: T) -> STMResult<()> {
+    pub fn write<T: Any + Sync + Send>(&mut self, tvar: &TVar<T>, value: T) -> StmResult<()> {
         match self.log.get_mut(&tvar.id) {
             Some(lvar) => {
                 lvar.write = true;
@@ -698,9 +717,9 @@ mod test {
         let add1 = |x: &i32| x + 1;
         let abort = || retry();
 
-        fn nested<F>(f: F) -> STMResult<()>
+        fn nested<F>(f: F) -> StmResult<()>
         where
-            F: FnOnce() -> STMResult<()>,
+            F: FnOnce() -> StmResult<()>,
         {
             or(f, || Ok(()))
         }
@@ -728,5 +747,32 @@ mod test {
         });
 
         assert_eq!(*v, 3);
+    }
+
+    #[test]
+    fn abort_with_error() {
+        let a = TVar::new(0);
+
+        #[derive(Debug, Clone)]
+        struct TestError;
+
+        impl std::fmt::Display for TestError {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "test error instance")
+            }
+        }
+
+        impl Error for TestError {}
+
+        let r = atomically_or_err(|| {
+            a.write(1)?;
+            abort(TestError)?;
+            Ok(())
+        });
+
+        assert_eq!(
+            r.err().map(|e| e.to_string()),
+            Some("test error instance".to_owned())
+        );
     }
 }

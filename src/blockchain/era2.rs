@@ -1,6 +1,5 @@
 use super::era1::{EpochId, Ledger, SlotId, Transaction, ValidatorId};
 use super::property;
-use super::property::HasHash;
 use super::{
     ecdsa::{PublicKey, Signature},
     CryptoHash,
@@ -34,11 +33,26 @@ pub struct RankingBlock {
     pub signature: Signature<ValidatorId, RankingBlock>,
 }
 
-impl HasHash for RankingBlock {
+impl property::HasHash for RankingBlock {
     type Hash = RankingBlockHash;
 
     fn hash(&self) -> Self::Hash {
         todo!()
+    }
+}
+
+impl property::RankingBlock for RankingBlock {
+    type InputBlockHash = InputBlockHash;
+    fn parent_hash(&self) -> Self::Hash {
+        self.parent_hash.clone()
+    }
+
+    fn height(&self) -> u64 {
+        self.height
+    }
+
+    fn input_block_hashes(&self) -> Vec<Self::InputBlockHash> {
+        self.input_block_hashes.clone()
     }
 }
 
@@ -62,12 +76,7 @@ impl InputBlockHeader {
     }
 }
 
-pub struct InputBock {
-    pub header: InputBlockHeader,
-    pub transactions: Vec<Transaction>,
-}
-
-impl HasHash for InputBlockHeader {
+impl property::HasHash for InputBlockHeader {
     type Hash = InputBlockHash;
 
     fn hash(&self) -> Self::Hash {
@@ -75,20 +84,24 @@ impl HasHash for InputBlockHeader {
     }
 }
 
-impl property::Block for RankingBlock {
-    fn parent_hash(&self) -> Self::Hash {
-        self.parent_hash.clone()
-    }
+pub struct InputBlock {
+    pub header: InputBlockHeader,
+    pub transactions: Vec<Transaction>,
+}
 
-    fn height(&self) -> u64 {
-        self.height
+impl property::HasTransactions for InputBlock {
+    type Transaction = Transaction;
+
+    fn transactions(&self) -> &Vec<Self::Transaction> {
+        &self.transactions
     }
 }
+
 pub struct Era2;
 
-// TODO: How do you encode the relationship between the input block, transaction and the ledger.
 impl property::Era for Era2 {
-    type Block = RankingBlock;
+    type RankingBlock = RankingBlock;
+    type InputBlock = InputBlock;
     type Transaction = Transaction;
     type Ledger = Ledger;
 }

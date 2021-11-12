@@ -1,3 +1,5 @@
+use crate::stm::Transaction;
+
 use super::CryptoHash;
 
 pub trait HasHash {
@@ -8,6 +10,11 @@ pub trait HasHash {
 pub trait HasHeader {
     type Header;
     fn header(&self) -> &Self::Header;
+}
+
+pub trait HasTransactions {
+    type Transaction;
+    fn transactions(&self) -> &Vec<Self::Transaction>;
 }
 
 impl<B> HasHash for B
@@ -22,9 +29,11 @@ where
     }
 }
 
-pub trait Block: HasHash {
+pub trait RankingBlock: HasHash {
+    type InputBlockHash;
     fn parent_hash(&self) -> Self::Hash;
     fn height(&self) -> u64;
+    fn input_block_hashes(&self) -> Vec<Self::InputBlockHash>;
 }
 
 pub trait Ledger
@@ -33,11 +42,12 @@ where
 {
     type Transaction;
     type Error;
-    fn apply_transaction(&self, tx: Self::Transaction) -> Result<Self, Self::Error>;
+    fn apply_transaction(&self, tx: &Self::Transaction) -> Result<Self, Self::Error>;
 }
 
 pub trait Era {
-    type Block: Block;
     type Transaction;
+    type RankingBlock: RankingBlock;
+    type InputBlock: HasTransactions<Transaction = Self::Transaction>;
     type Ledger: Ledger<Transaction = Self::Transaction>;
 }

@@ -1,10 +1,11 @@
 use im::HashMap;
 
 use super::era1::{
-    Account, AccountId, Amount, EpochId, SlotId, Transaction as Transfer, ValidatorId,
+    Account, AccountId, Amount, EpochId, SlotId, Transaction as Transfer, TransactionError,
+    ValidatorId,
 };
 use super::era2::MinerId;
-use super::property::{HasHash, HasHeader};
+use super::property;
 use super::{ecdsa::Signature, CryptoHash};
 
 #[derive(Clone)]
@@ -39,7 +40,19 @@ pub struct Ledger {
     pub useful_work_classifieds: HashMap<UsefulWorkHash, (UsefulWorkHeader, UsefulWorkStatus)>,
 }
 
+impl property::Ledger for Ledger {
+    type Transaction = Transaction;
+    type Error = TransactionError;
+
+    fn apply_transaction(&self, tx: &Self::Transaction) -> Result<Self, Self::Error> {
+        todo!()
+    }
+}
+
+#[derive(Clone)]
 pub struct InputBlockHash(CryptoHash);
+
+#[derive(Clone)]
 pub struct RankingBlockHash(CryptoHash);
 
 impl From<RankingBlockHash> for CryptoHash {
@@ -64,11 +77,27 @@ pub struct RankingBlock {
     pub signature: Signature<ValidatorId, RankingBlock>,
 }
 
-impl HasHash for RankingBlock {
+impl property::HasHash for RankingBlock {
     type Hash = RankingBlockHash;
 
     fn hash(&self) -> Self::Hash {
         todo!()
+    }
+}
+
+impl property::RankingBlock for RankingBlock {
+    type InputBlockHash = InputBlockHash;
+
+    fn parent_hash(&self) -> Self::Hash {
+        self.parent_hash.clone()
+    }
+
+    fn height(&self) -> u64 {
+        self.height
+    }
+
+    fn input_block_hashes(&self) -> Vec<Self::InputBlockHash> {
+        self.input_block_hashes.clone()
     }
 }
 
@@ -96,12 +125,7 @@ impl InputBlockHeader {
     }
 }
 
-pub struct InputBlock {
-    pub header: InputBlockHeader,
-    pub transactions: Vec<Transaction>,
-}
-
-impl HasHash for InputBlockHeader {
+impl property::HasHash for InputBlockHeader {
     type Hash = InputBlockHash;
 
     fn hash(&self) -> Self::Hash {
@@ -109,10 +133,32 @@ impl HasHash for InputBlockHeader {
     }
 }
 
-impl HasHeader for InputBlock {
+pub struct InputBlock {
+    pub header: InputBlockHeader,
+    pub transactions: Vec<Transaction>,
+}
+
+impl property::HasHeader for InputBlock {
     type Header = InputBlockHeader;
 
     fn header(&self) -> &Self::Header {
         &self.header
     }
+}
+
+impl property::HasTransactions for InputBlock {
+    type Transaction = Transaction;
+
+    fn transactions(&self) -> &Vec<Self::Transaction> {
+        &self.transactions
+    }
+}
+
+pub struct Era3;
+
+impl property::Era for Era3 {
+    type RankingBlock = RankingBlock;
+    type InputBlock = InputBlock;
+    type Transaction = Transaction;
+    type Ledger = Ledger;
 }

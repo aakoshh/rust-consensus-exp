@@ -1,5 +1,4 @@
-use super::property;
-use super::property::{HasHash, HasHeader};
+use super::property::{self, HasHash};
 use super::{
     ecdsa::{PublicKey, Signature},
     CryptoHash,
@@ -12,6 +11,7 @@ pub type EpochId = u64;
 pub type SlotId = u64;
 
 pub enum TransactionError {
+    NonExistentAccount,
     InsufficientFunds,
     IncorrectNonce,
 }
@@ -34,7 +34,7 @@ impl property::Ledger for Ledger {
     type Transaction = Transaction;
     type Error = TransactionError;
 
-    fn apply_transaction(&self, tx: Self::Transaction) -> Result<Self, Self::Error> {
+    fn apply_transaction(&self, tx: &Self::Transaction) -> Result<Self, Self::Error> {
         todo!()
     }
 }
@@ -55,7 +55,7 @@ pub struct Transaction {
     pub signature: Signature<AccountId, Transaction>,
 }
 
-impl HasHash for Transaction {
+impl property::HasHash for Transaction {
     type Hash = TransactionHash;
 
     fn hash(&self) -> Self::Hash {
@@ -85,7 +85,7 @@ pub struct BlockHeader {
     pub signature: Signature<ValidatorId, BlockHeader>,
 }
 
-impl HasHash for BlockHeader {
+impl property::HasHash for BlockHeader {
     type Hash = BlockHash;
 
     fn hash(&self) -> Self::Hash {
@@ -98,7 +98,7 @@ pub struct Block {
     pub transactions: Vec<Transaction>,
 }
 
-impl HasHeader for Block {
+impl property::HasHeader for Block {
     type Header = BlockHeader;
 
     fn header(&self) -> &Self::Header {
@@ -106,7 +106,17 @@ impl HasHeader for Block {
     }
 }
 
-impl property::Block for Block {
+impl property::HasTransactions for Block {
+    type Transaction = Transaction;
+
+    fn transactions(&self) -> &Vec<Self::Transaction> {
+        &self.transactions
+    }
+}
+
+impl property::RankingBlock for Block {
+    type InputBlockHash = BlockHash;
+
     fn parent_hash(&self) -> Self::Hash {
         self.header.parent_hash.clone()
     }
@@ -114,11 +124,17 @@ impl property::Block for Block {
     fn height(&self) -> u64 {
         self.header.height
     }
+
+    fn input_block_hashes(&self) -> Vec<Self::InputBlockHash> {
+        vec![self.header.hash()]
+    }
 }
+
 pub struct Era1;
 
 impl property::Era for Era1 {
-    type Block = Block;
     type Transaction = Transaction;
+    type RankingBlock = Block;
+    type InputBlock = Block;
     type Ledger = Ledger;
 }

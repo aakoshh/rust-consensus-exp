@@ -1,5 +1,3 @@
-use crate::stm::Transaction;
-
 use super::CryptoHash;
 
 pub trait HasHash {
@@ -29,6 +27,17 @@ where
     }
 }
 
+// NOTE: Ranking blocks are supposed to be small, so maybe instead of the traditional
+// header/body split, we can communicate in terms of ranking blocks and then input
+// headers and input body. That is so that we can validate the input block header
+// before downloading the transactions, so we can decide whether to switch to forks
+// just based on the light chain information.
+//
+// In the case when we have a single chain, we can set the ranking block to be the
+// block header, and the input block to be the full block. We can somehow detect
+// that we already have the input header if it's the same as the ranking block
+// itself. The storage for ranking blocks and input headers can then be the same.
+
 pub trait RankingBlock: HasHash {
     type InputBlockHash;
     fn parent_hash(&self) -> Self::Hash;
@@ -47,7 +56,7 @@ where
 
 pub trait Era {
     type Transaction;
-    type RankingBlock: RankingBlock;
-    type InputBlock: HasTransactions<Transaction = Self::Transaction>;
+    type InputBlock: HasHash + HasHeader + HasTransactions<Transaction = Self::Transaction>;
+    type RankingBlock: RankingBlock<InputBlockHash = <Self::InputBlock as HasHash>::Hash>;
     type Ledger: Ledger<Transaction = Self::Transaction>;
 }

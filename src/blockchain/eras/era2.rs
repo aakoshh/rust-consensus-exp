@@ -1,6 +1,6 @@
-use super::era1::{EpochId, Ledger, SlotId, Transaction, ValidatorId};
-use super::property;
-use super::{
+use crate::blockchain::eras::era1::{EpochId, Ledger, SlotId, Transaction, ValidatorId};
+use crate::blockchain::property;
+use crate::blockchain::{
     ecdsa::{PublicKey, Signature},
     CryptoHash,
 };
@@ -94,6 +94,14 @@ impl property::HasTransactions for InputBlock {
 
     fn transactions(&self) -> &Vec<Self::Transaction> {
         &self.transactions
+    }
+}
+
+impl property::HasHeader for InputBlock {
+    type Header = InputBlockHeader;
+
+    fn header(&self) -> &Self::Header {
+        &self.header
     }
 }
 

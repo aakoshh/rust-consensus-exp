@@ -1,12 +1,12 @@
 use im::HashMap;
 
-use super::era1::{
+use crate::blockchain::eras::era1::{
     Account, AccountId, Amount, EpochId, SlotId, Transaction as Transfer, TransactionError,
     ValidatorId,
 };
-use super::era2::MinerId;
-use super::property;
-use super::{ecdsa::Signature, CryptoHash};
+use crate::blockchain::eras::era2::MinerId;
+use crate::blockchain::property;
+use crate::blockchain::{ecdsa::Signature, CryptoHash};
 
 #[derive(Clone)]
 pub struct UsefulWorkHash(CryptoHash);

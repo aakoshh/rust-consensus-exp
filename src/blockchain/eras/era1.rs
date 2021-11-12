@@ -1,5 +1,5 @@
-use super::property::{self, HasHash};
-use super::{
+use crate::blockchain::property::{self, HasHash};
+use crate::blockchain::{
     ecdsa::{PublicKey, Signature},
     CryptoHash,
 };
@@ -93,6 +93,26 @@ impl property::HasHash for BlockHeader {
     }
 }
 
+/// By implementing `RankingBlock` for the `BlockHeader` instead of the `Block`,
+/// we can treat ranking blocks as small blocks, as if they were the traditional
+/// headers, and treat input blocks as full.
+///
+impl property::RankingBlock for BlockHeader {
+    type InputBlockHash = BlockHash;
+
+    fn parent_hash(&self) -> Self::Hash {
+        self.parent_hash.clone()
+    }
+
+    fn height(&self) -> u64 {
+        self.height
+    }
+
+    fn input_block_hashes(&self) -> Vec<Self::InputBlockHash> {
+        vec![self.hash()]
+    }
+}
+
 pub struct Block {
     pub header: BlockHeader,
     pub transactions: Vec<Transaction>,
@@ -114,27 +134,11 @@ impl property::HasTransactions for Block {
     }
 }
 
-impl property::RankingBlock for Block {
-    type InputBlockHash = BlockHash;
-
-    fn parent_hash(&self) -> Self::Hash {
-        self.header.parent_hash.clone()
-    }
-
-    fn height(&self) -> u64 {
-        self.header.height
-    }
-
-    fn input_block_hashes(&self) -> Vec<Self::InputBlockHash> {
-        vec![self.header.hash()]
-    }
-}
-
 pub struct Era1;
 
 impl property::Era for Era1 {
     type Transaction = Transaction;
-    type RankingBlock = Block;
+    type RankingBlock = BlockHeader;
     type InputBlock = Block;
     type Ledger = Ledger;
 }

@@ -1,7 +1,7 @@
+#![allow(unused_variables)]
+
 mod ecdsa;
-mod era1;
-mod era2;
-mod era3;
+mod eras;
 mod property;
 
 #[derive(Clone)]

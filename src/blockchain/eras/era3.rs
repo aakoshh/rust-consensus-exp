@@ -26,6 +26,7 @@ pub struct UsefulWorkStatus {
     remaining_reward: Amount,
 }
 
+#[derive(Clone)]
 pub struct UsefulWorkSubmission {
     useful_work_hash: UsefulWorkHash,
     solution: Vec<u8>,
@@ -42,11 +43,11 @@ pub struct Ledger {
     pub useful_work_classifieds: HashMap<UsefulWorkHash, (UsefulWorkHeader, UsefulWorkStatus)>,
 }
 
-impl property::Ledger for Ledger {
+impl<'a> property::Ledger<'a> for Ledger {
     type Transaction = Transaction;
     type Error = TransactionError;
 
-    fn apply_transaction(&self, tx: &Self::Transaction) -> Result<Self, Self::Error> {
+    fn apply_transaction(&'a self, tx: &Self::Transaction) -> Result<Self, Self::Error> {
         todo!()
     }
 }
@@ -79,7 +80,7 @@ pub struct RankingBlock {
     pub signature: Signature<ValidatorId, RankingBlock>,
 }
 
-impl property::HasHash for RankingBlock {
+impl<'a> property::HasHash<'a> for RankingBlock {
     type Hash = RankingBlockHash;
 
     fn hash(&self) -> Self::Hash {
@@ -87,7 +88,7 @@ impl property::HasHash for RankingBlock {
     }
 }
 
-impl property::RankingBlock for RankingBlock {
+impl<'a> property::RankingBlock<'a> for RankingBlock {
     type PrevEraHash = era2::RankingBlockHash;
     type InputBlockHash = InputBlockHash;
 
@@ -104,6 +105,7 @@ impl property::RankingBlock for RankingBlock {
     }
 }
 
+#[derive(Clone)]
 pub struct InputBlockHeader {
     pub parent_hashes: Vec<InputBlockHash>,
     pub content_hash: CryptoHash,
@@ -128,7 +130,7 @@ impl InputBlockHeader {
     }
 }
 
-impl property::HasHash for InputBlockHeader {
+impl<'a> property::HasHash<'a> for InputBlockHeader {
     type Hash = InputBlockHash;
 
     fn hash(&self) -> Self::Hash {
@@ -144,25 +146,27 @@ pub struct InputBlock {
 impl property::HasHeader for InputBlock {
     type Header = InputBlockHeader;
 
-    fn header(&self) -> &Self::Header {
-        &self.header
+    fn header(&self) -> Self::Header {
+        self.header.clone()
     }
 }
 
-impl property::HasTransactions for InputBlock {
+impl<'a> property::HasTransactions<'a> for InputBlock {
     type Transaction = Transaction;
-    type Transactions<'a> = std::slice::Iter<'a, Transaction>;
 
-    fn transactions<'a>(&'a self) -> Self::Transactions<'a> {
-        self.transactions.iter()
+    fn fold_transactions<F, R>(&'a self, init: R, f: F) -> R
+    where
+        F: Fn(R, &Self::Transaction) -> R,
+    {
+        self.transactions.iter().fold(init, f)
     }
 }
 
 pub struct Era3;
 
 impl property::Era for Era3 {
-    type RankingBlock = RankingBlock;
-    type InputBlock = InputBlock;
-    type Transaction = Transaction;
-    type Ledger = Ledger;
+    type RankingBlock<'a> = RankingBlock;
+    type InputBlock<'a> = InputBlock;
+    type Transaction<'a> = Transaction;
+    type Ledger<'a> = Ledger;
 }

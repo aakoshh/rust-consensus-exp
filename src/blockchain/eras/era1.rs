@@ -32,11 +32,11 @@ pub struct Ledger {
     pub accounts: HashMap<AccountId, Account>,
 }
 
-impl property::Ledger for Ledger {
+impl<'a> property::Ledger<'a> for Ledger {
     type Transaction = Transaction;
     type Error = TransactionError;
 
-    fn apply_transaction(&self, tx: &Self::Transaction) -> Result<Self, Self::Error> {
+    fn apply_transaction(&'a self, tx: &Self::Transaction) -> Result<Self, Self::Error> {
         todo!()
     }
 }
@@ -57,7 +57,7 @@ pub struct Transaction {
     pub signature: Signature<AccountId, Transaction>,
 }
 
-impl property::HasHash for Transaction {
+impl<'a> property::HasHash<'a> for Transaction {
     type Hash = TransactionHash;
 
     fn hash(&self) -> Self::Hash {
@@ -75,8 +75,10 @@ impl From<BlockHash> for CryptoHash {
     }
 }
 
+#[derive(Clone)]
 pub struct ValidatorId(PublicKey);
 
+#[derive(Clone)]
 pub struct BlockHeader {
     pub parent_hash: BlockHash,
     pub epoch_id: EpochId,
@@ -87,7 +89,7 @@ pub struct BlockHeader {
     pub signature: Signature<ValidatorId, BlockHeader>,
 }
 
-impl property::HasHash for BlockHeader {
+impl<'a> property::HasHash<'a> for BlockHeader {
     type Hash = BlockHash;
 
     fn hash(&self) -> Self::Hash {
@@ -99,7 +101,7 @@ impl property::HasHash for BlockHeader {
 /// we can treat ranking blocks as small blocks, as if they were the traditional
 /// headers, and treat input blocks as full.
 ///
-impl property::RankingBlock for BlockHeader {
+impl<'a> property::RankingBlock<'a> for BlockHeader {
     type PrevEraHash = !;
     type InputBlockHash = BlockHash;
 
@@ -124,25 +126,27 @@ pub struct Block {
 impl property::HasHeader for Block {
     type Header = BlockHeader;
 
-    fn header(&self) -> &Self::Header {
-        &self.header
+    fn header(&self) -> Self::Header {
+        self.header.clone()
     }
 }
 
-impl property::HasTransactions for Block {
+impl<'a> property::HasTransactions<'a> for Block {
     type Transaction = Transaction;
-    type Transactions<'a> = std::slice::Iter<'a, Transaction>;
 
-    fn transactions<'a>(&'a self) -> Self::Transactions<'a> {
-        self.transactions.iter()
+    fn fold_transactions<F, R>(&'a self, init: R, f: F) -> R
+    where
+        F: Fn(R, &Self::Transaction) -> R,
+    {
+        self.transactions.iter().fold(init, f)
     }
 }
 
 pub struct Era1;
 
 impl property::Era for Era1 {
-    type Transaction = Transaction;
-    type RankingBlock = BlockHeader;
-    type InputBlock = Block;
-    type Ledger = Ledger;
+    type Transaction<'a> = Transaction;
+    type RankingBlock<'a> = BlockHeader;
+    type InputBlock<'a> = Block;
+    type Ledger<'a> = Ledger;
 }

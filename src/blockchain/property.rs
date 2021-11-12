@@ -1,6 +1,6 @@
 use super::{eras::Crossing, CryptoHash};
 
-pub trait HasHash {
+pub trait HasHash<'a> {
     type Hash: Into<CryptoHash>;
 
     fn hash(&self) -> Self::Hash;
@@ -9,22 +9,25 @@ pub trait HasHash {
 pub trait HasHeader {
     type Header;
 
-    fn header(&self) -> &Self::Header;
+    fn header(&self) -> Self::Header;
 }
 
-pub trait HasTransactions {
-    type Transaction: 'static;
-    type Transactions<'a>: Iterator<Item = &'a Self::Transaction>;
+pub trait HasTransactions<'a> {
+    type Transaction;
 
-    fn transactions<'a>(&'a self) -> Self::Transactions<'a>;
+    // Using fold because otherwise there's no way to avoid cloning
+    // when trying to combine multiple eras into a coproduct.
+    fn fold_transactions<F, R>(&'a self, init: R, f: F) -> R
+    where
+        F: Fn(R, &Self::Transaction) -> R;
 }
 
-impl<B> HasHash for B
+impl<'a, B> HasHash<'a> for B
 where
     B: HasHeader,
-    B::Header: HasHash,
+    B::Header: HasHash<'a>,
 {
-    type Hash = <<B as HasHeader>::Header as HasHash>::Hash;
+    type Hash = <<B as HasHeader>::Header as HasHash<'a>>::Hash;
 
     fn hash(&self) -> Self::Hash {
         self.header().hash()
@@ -42,7 +45,7 @@ where
 // that we already have the input header if it's the same as the ranking block
 // itself. The storage for ranking blocks and input headers can then be the same.
 
-pub trait RankingBlock: HasHash {
+pub trait RankingBlock<'a>: HasHash<'a> {
     type PrevEraHash;
     type InputBlockHash;
 
@@ -51,19 +54,27 @@ pub trait RankingBlock: HasHash {
     fn input_block_hashes(&self) -> Vec<Self::InputBlockHash>;
 }
 
-pub trait Ledger
+pub trait Ledger<'a>
 where
     Self: Sized,
 {
     type Transaction;
     type Error;
 
-    fn apply_transaction(&self, tx: &Self::Transaction) -> Result<Self, Self::Error>;
+    fn apply_transaction(&'a self, tx: &Self::Transaction) -> Result<Self, Self::Error>;
 }
 
 pub trait Era {
-    type Transaction;
-    type InputBlock: HasHash + HasHeader + HasTransactions<Transaction = Self::Transaction>;
-    type RankingBlock: RankingBlock<InputBlockHash = <Self::InputBlock as HasHash>::Hash>;
-    type Ledger: Ledger<Transaction = Self::Transaction>;
+    type Transaction<'a>;
+
+    type InputBlock<'a>: HasHash<'a>
+        + HasHeader
+        + HasTransactions<'a, Transaction = Self::Transaction<'a>>;
+
+    type RankingBlock<'a>: RankingBlock<
+        'a,
+        InputBlockHash = <Self::InputBlock<'a> as HasHash<'a>>::Hash,
+    >;
+
+    type Ledger<'a>: Ledger<'a, Transaction = Self::Transaction<'a>>;
 }

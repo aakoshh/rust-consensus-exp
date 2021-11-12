@@ -35,7 +35,7 @@ pub struct RankingBlock {
     pub signature: Signature<ValidatorId, RankingBlock>,
 }
 
-impl property::HasHash for RankingBlock {
+impl<'a> property::HasHash<'a> for RankingBlock {
     type Hash = RankingBlockHash;
 
     fn hash(&self) -> Self::Hash {
@@ -43,7 +43,7 @@ impl property::HasHash for RankingBlock {
     }
 }
 
-impl property::RankingBlock for RankingBlock {
+impl<'a> property::RankingBlock<'a> for RankingBlock {
     type PrevEraHash = era1::BlockHash;
     type InputBlockHash = InputBlockHash;
     fn parent_hash(&self) -> Crossing<Self::PrevEraHash, Self::Hash> {
@@ -59,8 +59,10 @@ impl property::RankingBlock for RankingBlock {
     }
 }
 
+#[derive(Clone)]
 pub struct MinerId(PublicKey);
 
+#[derive(Clone)]
 pub struct InputBlockHeader {
     pub content_hash: CryptoHash,
     pub nonce: [u8; 32],
@@ -79,7 +81,7 @@ impl InputBlockHeader {
     }
 }
 
-impl property::HasHash for InputBlockHeader {
+impl<'a> property::HasHash<'a> for InputBlockHeader {
     type Hash = InputBlockHash;
 
     fn hash(&self) -> Self::Hash {
@@ -92,28 +94,30 @@ pub struct InputBlock {
     pub transactions: Vec<Transaction>,
 }
 
-impl property::HasTransactions for InputBlock {
+impl<'a> property::HasTransactions<'a> for InputBlock {
     type Transaction = Transaction;
-    type Transactions<'a> = std::slice::Iter<'a, Transaction>;
 
-    fn transactions<'a>(&'a self) -> Self::Transactions<'a> {
-        self.transactions.iter()
+    fn fold_transactions<F, R>(&'a self, init: R, f: F) -> R
+    where
+        F: Fn(R, &Self::Transaction) -> R,
+    {
+        self.transactions.iter().fold(init, f)
     }
 }
 
 impl property::HasHeader for InputBlock {
     type Header = InputBlockHeader;
 
-    fn header(&self) -> &Self::Header {
-        &self.header
+    fn header(&self) -> Self::Header {
+        self.header.clone()
     }
 }
 
 pub struct Era2;
 
 impl property::Era for Era2 {
-    type RankingBlock = RankingBlock;
-    type InputBlock = InputBlock;
-    type Transaction = Transaction;
-    type Ledger = Ledger;
+    type RankingBlock<'a> = RankingBlock;
+    type InputBlock<'a> = InputBlock;
+    type Transaction<'a> = Transaction;
+    type Ledger<'a> = Ledger;
 }

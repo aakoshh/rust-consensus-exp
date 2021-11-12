@@ -17,6 +17,8 @@ mod first;
 mod second;
 mod third;
 
+mod blockchain;
+
 trait Paxos {
     type Pid: Copy + PartialEq + Eq + Hash + PartialOrd + Debug + Sync + Send;
     type Value: Clone + Debug + Sync + Send;

@@ -1,18 +1,22 @@
-use super::CryptoHash;
+use super::{eras::Crossing, CryptoHash};
 
 pub trait HasHash {
     type Hash: Into<CryptoHash>;
+
     fn hash(&self) -> Self::Hash;
 }
 
 pub trait HasHeader {
     type Header;
+
     fn header(&self) -> &Self::Header;
 }
 
 pub trait HasTransactions {
-    type Transaction;
-    fn transactions(&self) -> &Vec<Self::Transaction>;
+    type Transaction: 'static;
+    type Transactions<'a>: Iterator<Item = &'a Self::Transaction>;
+
+    fn transactions<'a>(&'a self) -> Self::Transactions<'a>;
 }
 
 impl<B> HasHash for B
@@ -39,8 +43,10 @@ where
 // itself. The storage for ranking blocks and input headers can then be the same.
 
 pub trait RankingBlock: HasHash {
+    type PrevEraHash;
     type InputBlockHash;
-    fn parent_hash(&self) -> Self::Hash;
+
+    fn parent_hash(&self) -> Crossing<Self::PrevEraHash, Self::Hash>;
     fn height(&self) -> u64;
     fn input_block_hashes(&self) -> Vec<Self::InputBlockHash>;
 }
@@ -51,6 +57,7 @@ where
 {
     type Transaction;
     type Error;
+
     fn apply_transaction(&self, tx: &Self::Transaction) -> Result<Self, Self::Error>;
 }
 

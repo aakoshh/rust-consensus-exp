@@ -5,6 +5,8 @@ use crate::blockchain::{
     CryptoHash,
 };
 
+use super::{era1, Crossing};
+
 #[derive(Clone)]
 pub struct InputBlockHash(CryptoHash);
 
@@ -24,7 +26,7 @@ impl From<InputBlockHash> for CryptoHash {
 }
 
 pub struct RankingBlock {
-    pub parent_hash: RankingBlockHash,
+    pub parent_hash: Crossing<era1::BlockHash, RankingBlockHash>,
     pub epoch_id: EpochId,
     pub slot_id: SlotId,
     pub height: u64,
@@ -42,8 +44,9 @@ impl property::HasHash for RankingBlock {
 }
 
 impl property::RankingBlock for RankingBlock {
+    type PrevEraHash = era1::BlockHash;
     type InputBlockHash = InputBlockHash;
-    fn parent_hash(&self) -> Self::Hash {
+    fn parent_hash(&self) -> Crossing<Self::PrevEraHash, Self::Hash> {
         self.parent_hash.clone()
     }
 
@@ -91,9 +94,10 @@ pub struct InputBlock {
 
 impl property::HasTransactions for InputBlock {
     type Transaction = Transaction;
+    type Transactions<'a> = std::slice::Iter<'a, Transaction>;
 
-    fn transactions(&self) -> &Vec<Self::Transaction> {
-        &self.transactions
+    fn transactions<'a>(&'a self) -> Self::Transactions<'a> {
+        self.transactions.iter()
     }
 }
 

@@ -5,6 +5,8 @@ use crate::blockchain::{
 };
 use im::HashMap;
 
+use super::Crossing;
+
 pub type Amount = u64;
 pub type Nonce = u64;
 pub type EpochId = u64;
@@ -98,10 +100,11 @@ impl property::HasHash for BlockHeader {
 /// headers, and treat input blocks as full.
 ///
 impl property::RankingBlock for BlockHeader {
+    type PrevEraHash = !;
     type InputBlockHash = BlockHash;
 
-    fn parent_hash(&self) -> Self::Hash {
-        self.parent_hash.clone()
+    fn parent_hash(&self) -> Crossing<Self::PrevEraHash, Self::Hash> {
+        Crossing::Curr(self.parent_hash.clone())
     }
 
     fn height(&self) -> u64 {
@@ -128,9 +131,10 @@ impl property::HasHeader for Block {
 
 impl property::HasTransactions for Block {
     type Transaction = Transaction;
+    type Transactions<'a> = std::slice::Iter<'a, Transaction>;
 
-    fn transactions(&self) -> &Vec<Self::Transaction> {
-        &self.transactions
+    fn transactions<'a>(&'a self) -> Self::Transactions<'a> {
+        self.transactions.iter()
     }
 }
 

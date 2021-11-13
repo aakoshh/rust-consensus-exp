@@ -1,3 +1,6 @@
+use crate::define_coprod_impl;
+use paste::paste;
+
 use crate::blockchain::property::Era;
 
 use era1::Era1;
@@ -8,6 +11,9 @@ use super::{
     property::{HasHash, HasHeader, HasTransactions, Ledger, RankingBlock},
     CryptoHash,
 };
+
+#[macro_use]
+mod coprod;
 
 mod era1;
 mod era2;
@@ -22,52 +28,60 @@ pub enum Crossing<P, C> {
     Curr(C),
 }
 
-pub enum Coprod<E1, E2, E3> {
+#[derive(Clone)]
+pub enum Eras<E1, E2, E3> {
     Era1(E1),
     Era2(E2),
     Era3(E3),
 }
 
-type CoTransaction<'a> = Coprod<
+// For some reason Rust Analyzer says "{unknown}" in pattern matches
+// if I use the macro the generate the enum :(
+//define_coprod! {Eras { Era1, Era2, Era3 }}
+// Now just used to generate the companion.
+// Even this way the lambda parameters are "{unknown}" but they are quite mechanical.
+define_coprod_impl! {Eras { Era1, Era2, Era3 }}
+
+type CoTransaction<'a> = Eras<
     &'a <Era1 as Era>::Transaction<'a>,
     &'a <Era2 as Era>::Transaction<'a>,
     &'a <Era3 as Era>::Transaction<'a>,
 >;
 
-type CoInputBlock<'a> = Coprod<
+type CoInputBlock<'a> = Eras<
     <Era1 as Era>::InputBlock<'a>,
     <Era2 as Era>::InputBlock<'a>,
     <Era3 as Era>::InputBlock<'a>,
 >;
 
-type CoRankingBlock<'a> = Coprod<
+type CoRankingBlock<'a> = Eras<
     <Era1 as Era>::RankingBlock<'a>,
     <Era2 as Era>::RankingBlock<'a>,
     <Era3 as Era>::RankingBlock<'a>,
 >;
 
-type CoRankingBlockHash<'a> = Coprod<
+type CoRankingBlockHash<'a> = Eras<
     <<Era1 as Era>::RankingBlock<'a> as HasHash<'a>>::Hash,
     <<Era2 as Era>::RankingBlock<'a> as HasHash<'a>>::Hash,
     <<Era3 as Era>::RankingBlock<'a> as HasHash<'a>>::Hash,
 >;
 
-type CoInputBlockHash<'a> = Coprod<
+type CoInputBlockHash<'a> = Eras<
     <<Era1 as Era>::InputBlock<'a> as HasHash<'a>>::Hash,
     <<Era2 as Era>::InputBlock<'a> as HasHash<'a>>::Hash,
     <<Era3 as Era>::InputBlock<'a> as HasHash<'a>>::Hash,
 >;
 
-type CoInputBlockHeader<'a> = Coprod<
+type CoInputBlockHeader<'a> = Eras<
     <<Era1 as Era>::InputBlock<'a> as HasHeader>::Header,
     <<Era2 as Era>::InputBlock<'a> as HasHeader>::Header,
     <<Era3 as Era>::InputBlock<'a> as HasHeader>::Header,
 >;
 
 type CoLedger<'a> =
-    Coprod<<Era1 as Era>::Ledger<'a>, <Era2 as Era>::Ledger<'a>, <Era3 as Era>::Ledger<'a>>;
+    Eras<<Era1 as Era>::Ledger<'a>, <Era2 as Era>::Ledger<'a>, <Era3 as Era>::Ledger<'a>>;
 
-type CoLedgerError<'a> = Coprod<
+type CoLedgerError<'a> = Eras<
     <<Era1 as Era>::Ledger<'a> as Ledger<'a>>::Error,
     <<Era2 as Era>::Ledger<'a> as Ledger<'a>>::Error,
     <<Era3 as Era>::Ledger<'a> as Ledger<'a>>::Error,
@@ -75,21 +89,13 @@ type CoLedgerError<'a> = Coprod<
 
 impl<'a> From<CoInputBlockHash<'a>> for CryptoHash {
     fn from(hash: CoInputBlockHash<'a>) -> Self {
-        match hash {
-            Coprod::Era1(h) => h.into(),
-            Coprod::Era2(h) => h.into(),
-            Coprod::Era3(h) => h.into(),
-        }
+        hash.fold_into(|h| h.into(), |h| h.into(), |h| h.into())
     }
 }
 
 impl<'a> From<CoRankingBlockHash<'a>> for CryptoHash {
     fn from(hash: CoRankingBlockHash<'a>) -> Self {
-        match hash {
-            Coprod::Era1(h) => h.into(),
-            Coprod::Era2(h) => h.into(),
-            Coprod::Era3(h) => h.into(),
-        }
+        hash.fold_into(|h| h.into(), |h| h.into(), |h| h.into())
     }
 }
 
@@ -97,11 +103,7 @@ impl<'a> HasHash<'a> for CoInputBlockHeader<'a> {
     type Hash = CoInputBlockHash<'a>;
 
     fn hash(&self) -> Self::Hash {
-        match self {
-            Coprod::Era1(h) => Coprod::Era1(h.hash()),
-            Coprod::Era2(h) => Coprod::Era2(h.hash()),
-            Coprod::Era3(h) => Coprod::Era3(h.hash()),
-        }
+        self.map(|h| h.hash(), |h| h.hash(), |h| h.hash())
     }
 }
 
@@ -109,11 +111,7 @@ impl HasHeader for CoInputBlock<'_> {
     type Header = CoInputBlockHeader<'static>;
 
     fn header(&self) -> Self::Header {
-        match self {
-            Coprod::Era1(b) => Coprod::Era1(b.header()),
-            Coprod::Era2(b) => Coprod::Era2(b.header()),
-            Coprod::Era3(b) => Coprod::Era3(b.header()),
-        }
+        self.map(|b| b.header(), |b| b.header(), |b| b.header())
     }
 }
 
@@ -125,20 +123,20 @@ impl<'a> HasTransactions<'a> for CoInputBlock<'a> {
         F: Fn(R, &Self::Transaction) -> R,
     {
         match self {
-            Coprod::Era1(b) => b
+            Eras::Era1(b) => b
                 .transactions
                 .iter()
-                .fold(init, |acc, tx| f(acc, &Coprod::Era1(tx))),
+                .fold(init, |acc, tx| f(acc, &Eras::Era1(tx))),
 
-            Coprod::Era2(b) => b
+            Eras::Era2(b) => b
                 .transactions
                 .iter()
-                .fold(init, |acc, tx| f(acc, &Coprod::Era2(tx))),
+                .fold(init, |acc, tx| f(acc, &Eras::Era2(tx))),
 
-            Coprod::Era3(b) => b
+            Eras::Era3(b) => b
                 .transactions
                 .iter()
-                .fold(init, |acc, tx| f(acc, &Coprod::Era3(tx))),
+                .fold(init, |acc, tx| f(acc, &Eras::Era3(tx))),
         }
     }
 }
@@ -147,11 +145,7 @@ impl<'a> HasHash<'a> for CoRankingBlock<'a> {
     type Hash = CoRankingBlockHash<'a>;
 
     fn hash(&self) -> Self::Hash {
-        match self {
-            Coprod::Era1(h) => Coprod::Era1(h.hash()),
-            Coprod::Era2(h) => Coprod::Era2(h.hash()),
-            Coprod::Era3(h) => Coprod::Era3(h.hash()),
-        }
+        self.map(|h| h.hash(), |h| h.hash(), |h| h.hash())
     }
 }
 
@@ -161,45 +155,41 @@ impl<'a> RankingBlock<'a> for CoRankingBlock<'a> {
 
     fn parent_hash(&self) -> Crossing<Self::PrevEraHash, Self::Hash> {
         let parent_hash = match self {
-            Coprod::Era1(h) => Coprod::Era1(h.parent_hash.clone()),
-            Coprod::Era2(h) => match h.parent_hash.clone() {
-                Crossing::Prev(p) => Coprod::Era1(p),
-                Crossing::Curr(p) => Coprod::Era2(p),
+            Eras::Era1(h) => Eras::Era1(h.parent_hash.clone()),
+            Eras::Era2(h) => match h.parent_hash.clone() {
+                Crossing::Prev(p) => Eras::Era1(p),
+                Crossing::Curr(p) => Eras::Era2(p),
             },
-            Coprod::Era3(h) => match h.parent_hash.clone() {
-                Crossing::Prev(p) => Coprod::Era2(p),
-                Crossing::Curr(p) => Coprod::Era3(p),
+            Eras::Era3(h) => match h.parent_hash.clone() {
+                Crossing::Prev(p) => Eras::Era2(p),
+                Crossing::Curr(p) => Eras::Era3(p),
             },
         };
         Crossing::Curr(parent_hash)
     }
 
     fn height(&self) -> u64 {
-        match self {
-            Coprod::Era1(h) => h.height,
-            Coprod::Era2(h) => h.height,
-            Coprod::Era3(h) => h.height,
-        }
+        self.fold(|h| h.height, |h| h.height, |h| h.height)
     }
 
     fn input_block_hashes(&self) -> Vec<Self::InputBlockHash> {
         match self {
-            Coprod::Era1(h) => h
+            Eras::Era1(h) => h
                 .input_block_hashes()
                 .iter()
-                .map(|h| Coprod::Era1(h.clone()))
+                .map(|h| Eras::Era1(h.clone()))
                 .collect(),
 
-            Coprod::Era2(h) => h
+            Eras::Era2(h) => h
                 .input_block_hashes()
                 .iter()
-                .map(|h| Coprod::Era2(h.clone()))
+                .map(|h| Eras::Era2(h.clone()))
                 .collect(),
 
-            Coprod::Era3(h) => h
+            Eras::Era3(h) => h
                 .input_block_hashes()
                 .iter()
-                .map(|h| Coprod::Era3(h.clone()))
+                .map(|h| Eras::Era3(h.clone()))
                 .collect(),
         }
     }
@@ -211,22 +201,22 @@ impl<'a> Ledger<'a> for CoLedger<'a> {
 
     fn apply_transaction(&'a self, tx: &Self::Transaction) -> Result<Self, Self::Error> {
         match (self, tx) {
-            (Coprod::Era1(l), Coprod::Era1(tx)) => l
+            (Eras::Era1(l), Eras::Era1(tx)) => l
                 .apply_transaction(tx)
-                .map(Coprod::Era1)
-                .map_err(Coprod::Era1)
+                .map(Eras::Era1)
+                .map_err(Eras::Era1)
                 .map_err(Crossing::Curr),
 
-            (Coprod::Era2(l), Coprod::Era2(tx)) => l
+            (Eras::Era2(l), Eras::Era2(tx)) => l
                 .apply_transaction(tx)
-                .map(Coprod::Era2)
-                .map_err(Coprod::Era2)
+                .map(Eras::Era2)
+                .map_err(Eras::Era2)
                 .map_err(Crossing::Curr),
 
-            (Coprod::Era3(l), Coprod::Era3(tx)) => l
+            (Eras::Era3(l), Eras::Era3(tx)) => l
                 .apply_transaction(tx)
-                .map(Coprod::Era3)
-                .map_err(Coprod::Era3)
+                .map(Eras::Era3)
+                .map_err(Eras::Era3)
                 .map_err(Crossing::Curr),
 
             (_, _) => Err(Crossing::Prev(

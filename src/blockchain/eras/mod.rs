@@ -8,7 +8,7 @@ use era2::Era2;
 use era3::Era3;
 
 use super::{
-    property::{HasHash, HasHeader, HasTransactions, Ledger, RankingBlock},
+    property::{Crossing, HasHash, HasHeader, HasTransactions, Ledger, RankingBlock},
     CryptoHash,
 };
 
@@ -18,15 +18,6 @@ mod coprod;
 mod era1;
 mod era2;
 mod era3;
-
-/// An "either" type for things that can cross two eras,
-/// like the parent hash of a block, it may be pointing
-/// at a parent in the previous era.
-#[derive(Clone)]
-pub enum Crossing<P, C> {
-    Prev(P),
-    Curr(C),
-}
 
 #[derive(Clone)]
 pub enum Eras<E1, E2, E3> {

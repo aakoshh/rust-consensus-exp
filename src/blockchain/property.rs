@@ -1,4 +1,13 @@
-use super::{eras::Crossing, CryptoHash};
+use super::CryptoHash;
+
+/// An "either" type for things that can cross two eras,
+/// like the parent hash of a block, it may be pointing
+/// at a parent in the previous era.
+#[derive(Clone)]
+pub enum Crossing<P, C> {
+    Prev(P),
+    Curr(C),
+}
 
 pub trait HasHash<'a> {
     type Hash: Into<CryptoHash>;

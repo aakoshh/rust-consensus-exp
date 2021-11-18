@@ -3,8 +3,9 @@ use std::sync::Arc;
 
 use super::fsm::*;
 use super::PFSM;
-use crate::PaxosMessageDetail;
-use crate::{Effect, Event, InstanceId, Paxos, PaxosInstance, PaxosMessage};
+use crate::paxos::{
+    Effect, Event, InstanceId, Paxos, PaxosInstance, PaxosMessage, PaxosMessageDetail,
+};
 
 #[derive(Clone, Debug)]
 struct TestPaxos;

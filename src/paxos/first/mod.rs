@@ -5,7 +5,7 @@ mod test;
 
 use std::{collections::HashSet, marker::PhantomData, sync::Arc};
 
-use crate::{Effect, Paxos, PaxosInstance, PaxosMessage, PaxosMessageDetail, Vote};
+use crate::paxos::{Effect, Event, Paxos, PaxosInstance, PaxosMessage, PaxosMessageDetail, Vote};
 use fsm::{FSMResult, FSM};
 
 type Result<P> = FSMResult<PaxosInstance<P>, Effect<P>>;
@@ -16,13 +16,13 @@ pub(crate) struct PFSM<P: Paxos> {
 
 impl<P: Paxos + Clone> FSM for PFSM<P> {
     type State = PaxosInstance<P>;
-    type Event = crate::Event<P>;
-    type Effect = crate::Effect<P>;
+    type Event = Event<P>;
+    type Effect = Effect<P>;
 
     fn update(&self, state: &PaxosInstance<P>, event: Self::Event) -> Result<P> {
         match event {
-            crate::Event::RequestReceived(value) => PFSM::handle_request(state, value),
-            crate::Event::MessageReceived(msg) => PFSM::handle_message(state, msg),
+            Event::RequestReceived(value) => PFSM::handle_request(state, value),
+            Event::MessageReceived(msg) => PFSM::handle_message(state, msg),
         }
     }
 }

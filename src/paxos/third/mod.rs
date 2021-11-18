@@ -1,8 +1,8 @@
-use crate::first::fsm::FSM;
-use crate::first::PFSM;
+use crate::paxos::first::fsm::FSM;
+use crate::paxos::first::PFSM;
+use crate::paxos::{ClientRequest, Effect, Event, InstanceId, Paxos, PaxosInstance, PaxosMessage};
 use crate::stm::queues::{tqueue::TQueue, TQueueLike};
 use crate::stm::{atomically, or, StmResult, TVar};
-use crate::{ClientRequest, Effect, Event, InstanceId, Paxos, PaxosInstance, PaxosMessage};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::thread;

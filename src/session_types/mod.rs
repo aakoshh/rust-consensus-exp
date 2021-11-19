@@ -105,12 +105,23 @@ pub trait FlipAgency {}
 /// allows its role to do so. The agency also knows what the flip side is,
 /// and the right send/read method must be called depending on whether
 /// the message causes the agency to flip to the other side.
-pub struct Chan<R, A, E, P>(
-    ManuallyDrop<Sender<DynMessage>>,
-    ManuallyDrop<Receiver<DynMessage>>,
-    ManuallyDrop<Option<DynMessage>>,
-    PhantomData<(R, A, E, P)>,
-);
+pub struct Chan<R, A, E, P> {
+    tx: ManuallyDrop<Sender<DynMessage>>,
+    rx: ManuallyDrop<Receiver<DynMessage>>,
+    stash: ManuallyDrop<Option<DynMessage>>,
+    _phantom: PhantomData<(R, A, E, P)>,
+}
+
+impl<R, A, E, P> Chan<R, A, E, P> {
+    fn new(tx: Sender<DynMessage>, rx: Receiver<DynMessage>) -> Chan<R, A, E, P> {
+        Chan {
+            tx: ManuallyDrop::new(tx),
+            rx: ManuallyDrop::new(rx),
+            stash: ManuallyDrop::new(None),
+            _phantom: PhantomData,
+        }
+    }
+}
 
 fn downcast<T: 'static>(msg: DynMessage) -> SessionResult<T> {
     match msg.downcast::<T>() {
@@ -120,10 +131,12 @@ fn downcast<T: 'static>(msg: DynMessage) -> SessionResult<T> {
 }
 
 fn write_chan<R, A: Agency<Send = R>, T: marker::Send + 'static, E, P>(
-    &Chan(ref tx, _, _, _): &Chan<R, A, E, P>,
-    x: T,
+    chan: &Chan<R, A, E, P>,
+    v: T,
 ) -> SessionResult<()> {
-    tx.send(Box::new(x)).map_err(|_| SessionError::Disconnected)
+    chan.tx
+        .send(Box::new(v))
+        .map_err(|_| SessionError::Disconnected)
 }
 
 fn read_chan<R, A: Agency<Recv = R>, T: marker::Send + 'static, E, P>(
@@ -134,11 +147,22 @@ fn read_chan<R, A: Agency<Recv = R>, T: marker::Send + 'static, E, P>(
 }
 
 fn read_chan_dyn<R, A: Agency<Recv = R>, E, P>(
-    &mut Chan(_, ref rx, ref mut stash, _): &mut Chan<R, A, E, P>,
+    chan: &mut Chan<R, A, E, P>,
 ) -> SessionResult<DynMessage> {
-    match stash.take() {
+    match chan.stash.take() {
         Some(msg) => Ok(msg),
-        None => Ok(rx.recv()?),
+        None => Ok(chan.rx.recv()?),
+    }
+}
+
+fn close_chan<R, A, E, P>(chan: Chan<R, A, E, P>) {
+    // This method cleans up the channel without running the panicky destructor
+    // In essence, it calls the drop glue bypassing the `Drop::drop` method.
+    let mut this = ManuallyDrop::new(chan);
+    unsafe {
+        ManuallyDrop::drop(&mut this.tx);
+        ManuallyDrop::drop(&mut this.rx);
+        ManuallyDrop::drop(&mut this.stash);
     }
 }
 
@@ -231,28 +255,21 @@ impl<R, A, E, P> Drop for Chan<R, A, E, P> {
 impl<R, A, E> Chan<R, A, E, Eps> {
     /// Close a channel. Should always be used at the end of your program.
     pub fn close(self) -> SessionResult<()> {
-        // This method cleans up the channel without running the panicky destructor
-        // In essence, it calls the drop glue bypassing the `Drop::drop` method.
-        let mut this = ManuallyDrop::new(self);
-        unsafe {
-            ManuallyDrop::drop(&mut this.0);
-            ManuallyDrop::drop(&mut this.1);
-            ManuallyDrop::drop(&mut this.2);
-        }
+        close_chan(self);
         Ok(())
     }
 }
 
 impl<R, A, E, P> Chan<R, A, E, P> {
-    pub fn cast<A2, E2, P2>(self) -> Chan<R, A2, E2, P2> {
+    fn cast<A2, E2, P2>(self) -> Chan<R, A2, E2, P2> {
         let mut this = ManuallyDrop::new(self);
         unsafe {
-            Chan(
-                ManuallyDrop::new(ManuallyDrop::take(&mut this.0)),
-                ManuallyDrop::new(ManuallyDrop::take(&mut this.1)),
-                ManuallyDrop::new(ManuallyDrop::take(&mut this.2)),
-                PhantomData,
-            )
+            Chan {
+                tx: ManuallyDrop::new(ManuallyDrop::take(&mut this.tx)),
+                rx: ManuallyDrop::new(ManuallyDrop::take(&mut this.rx)),
+                stash: ManuallyDrop::new(ManuallyDrop::take(&mut this.stash)),
+                _phantom: PhantomData,
+            }
         }
     }
 }
@@ -265,8 +282,13 @@ where
     /// Send a value of type `T` over the channel. Returns a channel with protocol `P`.
     /// The next message will again have to be sent by this side.
     pub fn send_keep(self, v: T) -> SessionResult<Chan<R, A::Keep, E, P>> {
-        write_chan(&self, v)?;
-        Ok(self.cast())
+        match write_chan(&self, v) {
+            Ok(()) => Ok(self.cast()),
+            Err(e) => {
+                close_chan(self);
+                Err(e)
+            }
+        }
     }
 }
 
@@ -278,8 +300,13 @@ where
     /// Send a value of type `T` over the channel. Returns a channel with protocol `P`.
     /// The next message will have to be sent by the other side.
     pub fn send_flip(self, v: T) -> SessionResult<Chan<R, A::Flip, E, P>> {
-        write_chan(&self, v)?;
-        Ok(self.cast())
+        match write_chan(&self, v) {
+            Ok(()) => Ok(self.cast()),
+            Err(e) => {
+                close_chan(self);
+                Err(e)
+            }
+        }
     }
 }
 
@@ -292,8 +319,13 @@ where
     /// containing the resulting channel and the received value.
     /// The agency stays on the sender's side.
     pub fn recv_keep(mut self) -> SessionResult<(Chan<R, A::Keep, E, P>, T)> {
-        let v = read_chan(&mut self)?;
-        Ok((self.cast(), v))
+        match read_chan(&mut self) {
+            Ok(v) => Ok((self.cast(), v)),
+            Err(e) => {
+                close_chan(self);
+                Err(e)
+            }
+        }
     }
 }
 
@@ -306,8 +338,13 @@ where
     /// containing the resulting channel and the received value.
     /// The agency is transferred to the receiver's side.
     pub fn recv_flip(mut self) -> SessionResult<(Chan<R, A::Flip, E, P>, T)> {
-        let v = read_chan(&mut self)?;
-        Ok((self.cast(), v))
+        match read_chan(&mut self) {
+            Ok(v) => Ok((self.cast(), v)),
+            Err(e) => {
+                close_chan(self);
+                Err(e)
+            }
+        }
     }
 }
 
@@ -337,7 +374,7 @@ where
     /// Put the value we pulled from the channel back,
     /// so the next protocol step can read it and use it.
     fn stash(mut self, msg: DynMessage) -> Chan<R, A, E, Offer<P, Q>> {
-        self.2 = ManuallyDrop::new(Some(msg));
+        self.stash = ManuallyDrop::new(Some(msg));
         self
     }
 
@@ -387,19 +424,8 @@ pub fn session_channel<A: Agency, P: HasDual>(
     let (tx1, rx1) = mpsc::channel();
     let (tx2, rx2) = mpsc::channel();
 
-    let c1 = Chan(
-        ManuallyDrop::new(tx1),
-        ManuallyDrop::new(rx2),
-        ManuallyDrop::new(None),
-        PhantomData,
-    );
-
-    let c2 = Chan(
-        ManuallyDrop::new(tx2),
-        ManuallyDrop::new(rx1),
-        ManuallyDrop::new(None),
-        PhantomData,
-    );
+    let c1 = Chan::new(tx1, rx2);
+    let c2 = Chan::new(tx2, rx1);
 
     (c1, c2)
 }
@@ -409,16 +435,21 @@ mod test {
     use super::*;
     use std::thread;
 
-    #[test]
-    fn ping_pong() {
-        struct Ping;
-        struct Pong;
+    mod ping_pong {
+        use super::*;
+        pub struct Ping;
+        pub struct Pong;
 
         impl FlipAgency for Ping {}
         impl FlipAgency for Pong {}
 
-        type Server = Recv<Ping, Send<Pong, Eps>>;
-        type Client = <Server as HasDual>::Dual;
+        pub type Server = Recv<Ping, Send<Pong, Eps>>;
+        pub type Client = <Server as HasDual>::Dual;
+    }
+
+    #[test]
+    fn ping_pong_basics() {
+        use ping_pong::*;
 
         fn srv(c: Chan<AsServer, AsClient, (), Server>) -> SessionResult<()> {
             let (c, _ping) = c.recv_flip()?;
@@ -436,6 +467,39 @@ mod test {
         let srv_t = thread::spawn(move || srv(server_chan));
         let cli_t = thread::spawn(move || cli(client_chan));
 
-        let _ = (srv_t.join(), cli_t.join());
+        let _ = (srv_t.join().unwrap(), cli_t.join().unwrap());
+    }
+
+    #[test]
+    fn ping_pong_error() {
+        use ping_pong::*;
+
+        type WrongClient = Send<String, Recv<u64, Eps>>;
+
+        impl FlipAgency for String {}
+        impl FlipAgency for u64 {}
+
+        fn srv(c: Chan<AsServer, AsClient, (), Server>) -> SessionResult<()> {
+            let (c, _ping) = c.recv_flip()?;
+            c.send_flip(Pong)?.close()
+        }
+
+        fn cli(c: Chan<AsClient, AsClient, (), WrongClient>) -> SessionResult<()> {
+            let c = c.send_flip("Hello".into())?;
+            let (c, _n) = c.recv_flip()?;
+            c.close()
+        }
+
+        let (server_chan, client_chan) = session_channel::<AsClient, Server>();
+        let wrong_client_chan = client_chan.cast::<AsClient, (), WrongClient>();
+
+        let srv_t = thread::spawn(move || srv(server_chan));
+        let cli_t = thread::spawn(move || cli(wrong_client_chan));
+
+        let sr = srv_t.join().unwrap();
+        let cr = cli_t.join().unwrap();
+
+        assert!(sr.is_err());
+        assert!(cr.is_err());
     }
 }

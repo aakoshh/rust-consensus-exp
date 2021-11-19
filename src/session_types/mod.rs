@@ -108,7 +108,7 @@ pub trait FlipAgency {}
 pub struct Chan<R, A, E, P>(
     ManuallyDrop<Sender<DynMessage>>,
     ManuallyDrop<Receiver<DynMessage>>,
-    Option<DynMessage>,
+    ManuallyDrop<Option<DynMessage>>,
     PhantomData<(R, A, E, P)>,
 );
 
@@ -237,6 +237,7 @@ impl<R, A, E> Chan<R, A, E, Eps> {
         unsafe {
             ManuallyDrop::drop(&mut this.0);
             ManuallyDrop::drop(&mut this.1);
+            ManuallyDrop::drop(&mut this.2);
         }
         Ok(())
     }
@@ -249,7 +250,7 @@ impl<R, A, E, P> Chan<R, A, E, P> {
             Chan(
                 ManuallyDrop::new(ManuallyDrop::take(&mut this.0)),
                 ManuallyDrop::new(ManuallyDrop::take(&mut this.1)),
-                None,
+                ManuallyDrop::new(ManuallyDrop::take(&mut this.2)),
                 PhantomData,
             )
         }
@@ -336,7 +337,7 @@ where
     /// Put the value we pulled from the channel back,
     /// so the next protocol step can read it and use it.
     fn stash(mut self, msg: DynMessage) -> Chan<R, A, E, Offer<P, Q>> {
-        self.2 = Some(msg);
+        self.2 = ManuallyDrop::new(Some(msg));
         self
     }
 
@@ -389,14 +390,14 @@ pub fn session_channel<A: Agency, P: HasDual>(
     let c1 = Chan(
         ManuallyDrop::new(tx1),
         ManuallyDrop::new(rx2),
-        None,
+        ManuallyDrop::new(None),
         PhantomData,
     );
 
     let c2 = Chan(
         ManuallyDrop::new(tx2),
         ManuallyDrop::new(rx1),
-        None,
+        ManuallyDrop::new(None),
         PhantomData,
     );
 

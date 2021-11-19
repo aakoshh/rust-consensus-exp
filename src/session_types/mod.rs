@@ -1,13 +1,18 @@
-// Inspired by https://github.com/Munksgaard/session-types and
-// https://github.com/input-output-hk/ouroboros-network/blob/master/typed-protocols/src/Network/TypedProtocol/Core.hs
-// with the following goals:
-// * Express the messages as an ADT, so every protocol has a single overall message type enum.
-// * Send dynamic types in the channel that can be downcast into specific types the protocol expects,
-//   so that we can handle mismatches gracefully, without segfaults, assuming they are coming over the network.
-// * Do away without having to send `true` or `false` to indicate choice in `Choose` and `Offer`.
-//   Instead, the channel state will have an `Agency` associated with it that expresses who can send the next message.
-//   That means `Choose<Send, Recv>` will no longer be possible.
-
+/// Inspired by:
+/// * https://github.com/Munksgaard/session-types
+/// * https://github.com/input-output-hk/ouroboros-network/#ouroboros-network-documentation
+/// * https://github.com/input-output-hk/ouroboros-network/blob/master/typed-protocols/src/Network/TypedProtocol/Core.hs
+///
+/// The following changes from the original Rust library:
+/// * Send dynamic types in the channel that can be downcast into specific types the protocol expects,
+///   so that we can handle mismatches gracefully, without segfaults, assuming that they are coming over the network
+///   and cannot be trusted to be correct. The compiler is there to help get the protocol right for honest participants,
+///   but in itself cannot guarantee what the right content will arrive.
+/// * Do away without having to send `true` or `false` to indicate choice in `Choose` and `Offer`.
+///   Instead, the channel state will have an `Agency` associated with it that expresses who can send the next message.
+///   That means `Choose<Send, Recv>` will no longer be possibl, because the other side wouldn't know what we decided;
+///   there has to be an explicit message communicating the choice, and transfering the agency to the opposite peer.
+/// * Returning `Result` type so errors can be inspected. An error closes the channel to be closed.
 use std::{
     any::Any,
     error::Error,
@@ -15,6 +20,7 @@ use std::{
     marker::PhantomData,
     mem::ManuallyDrop,
     sync::mpsc::{self, Receiver, RecvError, RecvTimeoutError, Sender},
+    time::Duration,
 };
 
 use Branch::*;
@@ -71,10 +77,6 @@ pub trait Agency {
     type Send;
     /// The type of the opposite agency.
     type Recv;
-    /// Keep agency means the right to send stays with the sender.
-    type Keep = Self::Send;
-    /// Flipping agency means the right to send goes over to the receiver.
-    type Flip = Self::Recv;
 }
 
 /// Agency for protocol states where the client sends the next message.
@@ -141,17 +143,19 @@ fn write_chan<R, A: Agency<Send = R>, T: Message, E, P>(
 
 fn read_chan<R, A: Agency<Recv = R>, T: Message, E, P>(
     chan: &mut Chan<R, A, E, P>,
+    timeout: Duration,
 ) -> SessionResult<T> {
-    let msg = read_chan_dyn(chan)?;
+    let msg = read_chan_dyn(chan, timeout)?;
     downcast(msg)
 }
 
 fn read_chan_dyn<R, A: Agency<Recv = R>, E, P>(
     chan: &mut Chan<R, A, E, P>,
+    timeout: Duration,
 ) -> SessionResult<DynMessage> {
     match chan.stash.take() {
         Some(msg) => Ok(msg),
-        None => Ok(chan.rx.recv()?),
+        None => Ok(chan.rx.recv_timeout(timeout)?),
     }
 }
 
@@ -246,6 +250,8 @@ pub enum Branch<L, R> {
     Right(R),
 }
 
+/// A sanity check destructor that kicks in if we abandon the channel by
+/// returning `Ok(_)` without closing it first.
 impl<R, A, E, P> Drop for Chan<R, A, E, P> {
     fn drop(&mut self) {
         panic!("Session channel prematurely dropped. Must call `.close()`.");
@@ -298,8 +304,8 @@ where
 {
     /// Receives a value of type `T` from the channel. Returns a tuple
     /// containing the resulting channel and the received value.
-    pub fn recv(mut self) -> SessionResult<(Chan<R, T::Next, E, P>, T)> {
-        match read_chan(&mut self) {
+    pub fn recv(mut self, timeout: Duration) -> SessionResult<(Chan<R, T::Next, E, P>, T)> {
+        match read_chan(&mut self, timeout) {
             Ok(v) => Ok((self.cast(), v)),
             Err(e) => {
                 close_chan(self);
@@ -343,10 +349,13 @@ where
     /// of two options for continuing the protocol: either `P` or `Q`.
     /// Both options mean they will have to send a message to us,
     /// the agency is on their side.
-    pub fn offer(mut self) -> SessionResult<Branch<Chan<R, A, E, P>, Chan<R, A, E, Q>>> {
+    pub fn offer(
+        mut self,
+        t: Duration,
+    ) -> SessionResult<Branch<Chan<R, A, E, P>, Chan<R, A, E, Q>>> {
         // The next message we read from the channel decides
         // which protocol we go with.
-        let msg = read_chan_dyn(&mut self)?;
+        let msg = read_chan_dyn(&mut self, t)?;
 
         if msg.downcast_ref::<P::Message>().is_some() {
             Ok(Left(self.stash(msg).cast()))
@@ -415,17 +424,18 @@ mod test {
     #[test]
     fn ping_pong_basics() {
         use ping_pong::*;
+        let t = Duration::from_millis(100);
 
-        fn srv(c: Chan<AsServer, AsClient, (), Server>) -> SessionResult<()> {
-            let (c, _ping) = c.recv()?;
+        let srv = move |c: Chan<AsServer, AsClient, (), Server>| {
+            let (c, _ping) = c.recv(t)?;
             c.send(Pong)?.close()
-        }
+        };
 
-        fn cli(c: Chan<AsClient, AsClient, (), Client>) -> SessionResult<()> {
+        let cli = move |c: Chan<AsClient, AsClient, (), Client>| {
             let c = c.send(Ping)?;
-            let (c, _pong) = c.recv()?;
+            let (c, _pong) = c.recv(t)?;
             c.close()
-        }
+        };
 
         let (server_chan, client_chan) = session_channel::<AsClient, Server>();
 
@@ -438,6 +448,7 @@ mod test {
     #[test]
     fn ping_pong_error() {
         use ping_pong::*;
+        let t = Duration::from_secs(10);
 
         type WrongClient = Send<String, Recv<u64, Eps>>;
 
@@ -448,16 +459,16 @@ mod test {
             type Next = AsClient;
         }
 
-        fn srv(c: Chan<AsServer, AsClient, (), Server>) -> SessionResult<()> {
-            let (c, _ping) = c.recv()?;
+        let srv = move |c: Chan<AsServer, AsClient, (), Server>| {
+            let (c, _ping) = c.recv(t)?;
             c.send(Pong)?.close()
-        }
+        };
 
-        fn cli(c: Chan<AsClient, AsClient, (), WrongClient>) -> SessionResult<()> {
+        let cli = move |c: Chan<AsClient, AsClient, (), WrongClient>| {
             let c = c.send("Hello".into())?;
-            let (c, _n) = c.recv()?;
+            let (c, _n) = c.recv(t)?;
             c.close()
-        }
+        };
 
         let (server_chan, client_chan) = session_channel::<AsClient, Server>();
         let wrong_client_chan = client_chan.cast::<AsClient, (), WrongClient>();

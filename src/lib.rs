@@ -7,4 +7,5 @@
 extern crate test as etest;
 
 mod paxos;
+mod session_types;
 mod stm;

@@ -88,11 +88,11 @@ impl Agency for AsServer {
     type Send = AsServer;
     type Recv = AsClient;
 }
-/// Marker trait for messages that keep the agency on the sender's side.
-pub trait KeepAgency {}
 
-/// Marker trait for messages that flip the agency to the receiver's side.
-pub trait FlipAgency {}
+/// Define where the agency is transferred after the message is sent/received.
+pub trait Message: marker::Send + 'static {
+    type Next: Agency;
+}
 
 /// A session typed channel. `P` is the protocol and `E` is the environment,
 /// containing potential recursion targets.
@@ -130,7 +130,7 @@ fn downcast<T: 'static>(msg: DynMessage) -> SessionResult<T> {
     }
 }
 
-fn write_chan<R, A: Agency<Send = R>, T: marker::Send + 'static, E, P>(
+fn write_chan<R, A: Agency<Send = R>, T: Message, E, P>(
     chan: &Chan<R, A, E, P>,
     v: T,
 ) -> SessionResult<()> {
@@ -139,7 +139,7 @@ fn write_chan<R, A: Agency<Send = R>, T: marker::Send + 'static, E, P>(
         .map_err(|_| SessionError::Disconnected)
 }
 
-fn read_chan<R, A: Agency<Recv = R>, T: marker::Send + 'static, E, P>(
+fn read_chan<R, A: Agency<Recv = R>, T: Message, E, P>(
     chan: &mut Chan<R, A, E, P>,
 ) -> SessionResult<T> {
     let msg = read_chan_dyn(chan)?;
@@ -195,10 +195,10 @@ pub struct Var<N>(PhantomData<N>);
 
 /// Indicate what type of message a protocol expects next.
 pub trait ExpectsMessage {
-    type Message;
+    type Message: Message;
 }
 
-impl<T, P> ExpectsMessage for Recv<T, P> {
+impl<T: Message, P> ExpectsMessage for Recv<T, P> {
     type Message = T;
 }
 
@@ -277,29 +277,10 @@ impl<R, A, E, P> Chan<R, A, E, P> {
 impl<R, A, E, P, T> Chan<R, A, E, Send<T, P>>
 where
     A: Agency<Send = R>,
-    T: marker::Send + 'static + KeepAgency,
+    T: Message,
 {
     /// Send a value of type `T` over the channel. Returns a channel with protocol `P`.
-    /// The next message will again have to be sent by this side.
-    pub fn send_keep(self, v: T) -> SessionResult<Chan<R, A::Keep, E, P>> {
-        match write_chan(&self, v) {
-            Ok(()) => Ok(self.cast()),
-            Err(e) => {
-                close_chan(self);
-                Err(e)
-            }
-        }
-    }
-}
-
-impl<R, A, E, P, T> Chan<R, A, E, Send<T, P>>
-where
-    A: Agency<Send = R>,
-    T: marker::Send + 'static + FlipAgency,
-{
-    /// Send a value of type `T` over the channel. Returns a channel with protocol `P`.
-    /// The next message will have to be sent by the other side.
-    pub fn send_flip(self, v: T) -> SessionResult<Chan<R, A::Flip, E, P>> {
+    pub fn send(self, v: T) -> SessionResult<Chan<R, T::Next, E, P>> {
         match write_chan(&self, v) {
             Ok(()) => Ok(self.cast()),
             Err(e) => {
@@ -313,31 +294,11 @@ where
 impl<R, A, E, P, T> Chan<R, A, E, Recv<T, P>>
 where
     A: Agency<Recv = R>,
-    T: marker::Send + 'static + KeepAgency,
+    T: Message,
 {
     /// Receives a value of type `T` from the channel. Returns a tuple
     /// containing the resulting channel and the received value.
-    /// The agency stays on the sender's side.
-    pub fn recv_keep(mut self) -> SessionResult<(Chan<R, A::Keep, E, P>, T)> {
-        match read_chan(&mut self) {
-            Ok(v) => Ok((self.cast(), v)),
-            Err(e) => {
-                close_chan(self);
-                Err(e)
-            }
-        }
-    }
-}
-
-impl<R, A, E, P, T> Chan<R, A, E, Recv<T, P>>
-where
-    A: Agency<Recv = R>,
-    T: marker::Send + 'static + FlipAgency,
-{
-    /// Receives a value of type `T` from the channel. Returns a tuple
-    /// containing the resulting channel and the received value.
-    /// The agency is transferred to the receiver's side.
-    pub fn recv_flip(mut self) -> SessionResult<(Chan<R, A::Flip, E, P>, T)> {
+    pub fn recv(mut self) -> SessionResult<(Chan<R, T::Next, E, P>, T)> {
         match read_chan(&mut self) {
             Ok(v) => Ok((self.cast(), v)),
             Err(e) => {
@@ -440,8 +401,12 @@ mod test {
         pub struct Ping;
         pub struct Pong;
 
-        impl FlipAgency for Ping {}
-        impl FlipAgency for Pong {}
+        impl Message for Ping {
+            type Next = AsServer;
+        }
+        impl Message for Pong {
+            type Next = AsClient;
+        }
 
         pub type Server = Recv<Ping, Send<Pong, Eps>>;
         pub type Client = <Server as HasDual>::Dual;
@@ -452,13 +417,13 @@ mod test {
         use ping_pong::*;
 
         fn srv(c: Chan<AsServer, AsClient, (), Server>) -> SessionResult<()> {
-            let (c, _ping) = c.recv_flip()?;
-            c.send_flip(Pong)?.close()
+            let (c, _ping) = c.recv()?;
+            c.send(Pong)?.close()
         }
 
         fn cli(c: Chan<AsClient, AsClient, (), Client>) -> SessionResult<()> {
-            let c = c.send_flip(Ping)?;
-            let (c, _pong) = c.recv_flip()?;
+            let c = c.send(Ping)?;
+            let (c, _pong) = c.recv()?;
             c.close()
         }
 
@@ -476,17 +441,21 @@ mod test {
 
         type WrongClient = Send<String, Recv<u64, Eps>>;
 
-        impl FlipAgency for String {}
-        impl FlipAgency for u64 {}
+        impl Message for String {
+            type Next = AsServer;
+        }
+        impl Message for u64 {
+            type Next = AsClient;
+        }
 
         fn srv(c: Chan<AsServer, AsClient, (), Server>) -> SessionResult<()> {
-            let (c, _ping) = c.recv_flip()?;
-            c.send_flip(Pong)?.close()
+            let (c, _ping) = c.recv()?;
+            c.send(Pong)?.close()
         }
 
         fn cli(c: Chan<AsClient, AsClient, (), WrongClient>) -> SessionResult<()> {
-            let c = c.send_flip("Hello".into())?;
-            let (c, _n) = c.recv_flip()?;
+            let c = c.send("Hello".into())?;
+            let (c, _n) = c.recv()?;
             c.close()
         }
 

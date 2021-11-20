@@ -8,9 +8,10 @@ use std::{
     time::Duration,
 };
 
-use Branch::*;
+pub use Branch::*;
 
-use super::{downcast, DynMessage, SessionError, SessionResult};
+use super::{downcast, DynMessage};
+pub use super::{ok, SessionError, SessionResult};
 
 /// A session typed channel. `P` is the protocol and `E` is the environment,
 /// containing potential recursion targets.
@@ -80,10 +81,10 @@ pub struct Recv<T, P>(PhantomData<(T, P)>);
 pub struct Send<T, P>(PhantomData<(T, P)>);
 
 /// Active choice between `P` and `Q`
-pub struct Choose<P, Q>(PhantomData<(P, Q)>);
+pub struct Choose<P: Outgoing, Q: Outgoing>(PhantomData<(P, Q)>);
 
 /// Passive choice (offer) between `P` and `Q`
-pub struct Offer<P, Q>(PhantomData<(P, Q)>);
+pub struct Offer<P: Incoming, Q: Incoming>(PhantomData<(P, Q)>);
 
 /// Enter a recursive environment.
 pub struct Rec<P>(PhantomData<P>);
@@ -91,14 +92,17 @@ pub struct Rec<P>(PhantomData<P>);
 /// Recurse. N indicates how many layers of the recursive environment we recurse out of.
 pub struct Var<N>(PhantomData<N>);
 
-/// Indicate what type of message a protocol expects next.
-pub trait Incoming {
-    type Message;
-}
+/// Indicate that a protocol will receive a message..
+pub trait Incoming {}
 
-impl<T, P> Incoming for Recv<T, P> {
-    type Message = T;
-}
+impl<T, P> Incoming for Recv<T, P> {}
+impl<P: Incoming, Q: Incoming> Incoming for Offer<P, Q> {}
+
+/// Indicate that a protocol will send a message.
+pub trait Outgoing {}
+
+impl<T, P> Outgoing for Send<T, P> {}
+impl<P: Outgoing, Q: Outgoing> Outgoing for Choose<P, Q> {}
 
 /// The HasDual trait defines the dual relationship between protocols.
 ///
@@ -119,11 +123,23 @@ impl<A, P: HasDual> HasDual for Recv<A, P> {
     type Dual = Send<A, P::Dual>;
 }
 
-impl<P: HasDual, Q: HasDual> HasDual for Choose<P, Q> {
+impl<P: HasDual, Q: HasDual> HasDual for Choose<P, Q>
+where
+    P: Outgoing,
+    Q: Outgoing,
+    P::Dual: Incoming,
+    Q::Dual: Incoming,
+{
     type Dual = Offer<P::Dual, Q::Dual>;
 }
 
-impl<P: HasDual, Q: HasDual> HasDual for Offer<P, Q> {
+impl<P: HasDual, Q: HasDual> HasDual for Offer<P, Q>
+where
+    P: Incoming,
+    Q: Incoming,
+    P::Dual: Outgoing,
+    Q::Dual: Outgoing,
+{
     type Dual = Choose<P::Dual, Q::Dual>;
 }
 
@@ -201,7 +217,7 @@ impl<E, P, T: marker::Send + 'static> Chan<E, Recv<T, P>> {
     }
 }
 
-impl<E, P, Q> Chan<E, Choose<P, Q>> {
+impl<E, P: Outgoing, Q: Outgoing> Chan<E, Choose<P, Q>> {
     /// Perform an active choice, selecting protocol `P`.
     /// We haven't sent any value yet, so the agency stays on our side.
     pub fn sel1(self) -> Chan<E, P> {
@@ -215,14 +231,10 @@ impl<E, P, Q> Chan<E, Choose<P, Q>> {
     }
 }
 
-impl<E, P, Q> Chan<E, Offer<P, Q>>
-where
-    P: Incoming,
-    P::Message: 'static,
-{
+impl<T: 'static, E, P, Q: Incoming> Chan<E, Offer<Recv<T, P>, Q>> {
     /// Put the value we pulled from the channel back,
     /// so the next protocol step can read it and use it.
-    fn stash(mut self, msg: DynMessage) -> Chan<E, Offer<P, Q>> {
+    fn stash(mut self, msg: DynMessage) -> Self {
         self.stash = ManuallyDrop::new(Some(msg));
         self
     }
@@ -231,12 +243,12 @@ where
     /// of two options for continuing the protocol: either `P` or `Q`.
     /// Both options mean they will have to send a message to us,
     /// the agency is on their side.
-    pub fn offer(mut self, t: Duration) -> SessionResult<Branch<Chan<E, P>, Chan<E, Q>>> {
+    pub fn offer(mut self, t: Duration) -> SessionResult<Branch<Chan<E, Recv<T, P>>, Chan<E, Q>>> {
         // The next message we read from the channel decides
         // which protocol we go with.
         let msg = read_chan_dyn(&mut self, t)?;
 
-        if msg.downcast_ref::<P::Message>().is_some() {
+        if msg.downcast_ref::<T>().is_some() {
             Ok(Left(self.stash(msg).cast()))
         } else {
             Ok(Right(self.stash(msg).cast()))
@@ -288,34 +300,36 @@ pub fn session_channel<P: HasDual>() -> (Chan<(), P>, Chan<(), P::Dual>) {
 /// we can use the `offer!` macro as follows:
 ///
 /// ```rust
-/// extern crate session_types;
-/// use session_types::*;
+/// use paxos::offer;
+/// use paxos::session::types::*;
 /// use std::thread::spawn;
+/// use std::time::Duration;
 ///
-/// fn srv(c: Chan<(), Offer<Recv<u64, Eps>, Offer<Recv<String, Eps>, Eps>>>) {
-///     offer! { c,
+/// fn srv(c: Chan<(), Offer<Recv<u64, Eps>, Offer<Recv<String, Eps>, Eps>>>) -> SessionResult<()>{
+///     let t = Duration::from_secs(1);
+///     offer! { c, t,
 ///         Number => {
-///             let (c, n) = c.recv();
+///             let (c, n) = c.recv(t)?;
 ///             assert_eq!(42, n);
-///             c.close();
+///             c.close()
 ///         },
 ///         String => {
-///             c.recv().0.close();
+///             c.recv(t)?.0.close()
 ///         },
 ///         Quit => {
-///             c.close();
+///             c.close()
 ///         }
 ///     }
 /// }
 ///
-/// fn cli(c: Chan<(), Choose<Send<u64, Eps>, Choose<Send<String, Eps>, Eps>>>) {
-///     c.sel1().send(42).close();
+/// fn cli(c: Chan<(), Choose<Send<u64, Eps>, Choose<Send<String, Eps>, Eps>>>) -> SessionResult<()>{
+///     c.sel1().send(42)?.close()
 /// }
 ///
 /// fn main() {
 ///     let (s, c) = session_channel();
-///     spawn(move|| cli(c));
-///     srv(s);
+///     spawn(move|| cli(c).unwrap());
+///     srv(s).unwrap();
 /// }
 /// ```
 ///
@@ -324,15 +338,15 @@ pub fn session_channel<P: HasDual>() -> (Chan<(), P>, Chan<(), P::Dual>) {
 #[macro_export]
 macro_rules! offer {
     (
-        $id:ident, $branch:ident => $code:expr, $($t:tt)+
+        $id:ident, $timeout:ident, $branch:ident => $code:expr, $($t:tt)+
     ) => (
-        match $id.offer() {
-            $crate::Left($id) => $code,
-            $crate::Right($id) => offer!{ $id, $($t)+ }
+        match $id.offer($timeout)? {
+            $crate::session::types::Left($id) => $code,
+            $crate::session::types::Right($id) => offer!{ $id, $timeout, $($t)+ }
         }
     );
     (
-        $id:ident, $branch:ident => $code:expr
+        $id:ident, $timeout:ident, $branch:ident => $code:expr
     ) => (
         $code
     )
@@ -413,18 +427,75 @@ mod test {
         struct Greetings(String);
         struct TimeRequest;
         struct TimeResponse(Instant);
-        struct AddRequest1(u32);
-        struct AddRequest2(u32);
+        struct AddRequest(u32);
         struct AddResponse(u32);
         struct Quit;
 
         type TimeProtocol = Recv<TimeRequest, Send<TimeResponse, Var<Z>>>;
-        type AddProtocol = Recv<AddRequest1, Recv<AddRequest2, Send<AddResponse, Var<Z>>>>;
+        type AddProtocol = Recv<AddRequest, Recv<AddRequest, Send<AddResponse, Var<Z>>>>;
         type QuitProtocol = Recv<Quit, Eps>;
 
-        type Server =
-            Recv<Hail, Send<Greetings, Rec<Offer<TimeProtocol, Offer<AddProtocol, QuitProtocol>>>>>;
+        type ProtocolChoices = Offer<TimeProtocol, Offer<AddProtocol, QuitProtocol>>;
 
+        type Server = Recv<Hail, Send<Greetings, Rec<ProtocolChoices>>>;
         type Client = <Server as HasDual>::Dual;
+
+        // It is at this point that an invalid protocol would fail to compile.
+        let (server_chan, client_chan) = session_channel::<Server>();
+
+        let srv = |c: Chan<(), Server>| {
+            let t = Duration::from_millis(100);
+            let (c, Hail(cid)) = c.recv(t)?;
+            let c = c.send(Greetings(format!("Hello {}!", cid)))?;
+            let mut c = c.enter();
+            loop {
+                c = offer! { c, t,
+                    Time => {
+                        let (c, TimeRequest) = c.recv(t)?;
+                        let c = c.send(TimeResponse(Instant::now()))?;
+                        c.zero()
+                    },
+                    Add => {
+                            let (c, AddRequest(a)) = c.recv(t)?;
+                            let (c, AddRequest(b)) = c.recv(t)?;
+                            let c = c.send(AddResponse(a + b))?;
+                            c.zero()
+                    },
+                    Quit => {
+                        let (c, Quit) = c.recv(t)?;
+                        c.close()?;
+                        break;
+                    }
+                };
+            }
+
+            ok(())
+        };
+
+        let cli = |c: Chan<(), Client>| {
+            let t = Duration::from_millis(100);
+            let c = c.send(Hail("Rusty".into()))?;
+            let (c, Greetings(_)) = c.recv(t)?;
+            let c = c.enter();
+            let (c, AddResponse(r)) = c
+                .sel2()
+                .sel1()
+                .send(AddRequest(1))?
+                .send(AddRequest(2))?
+                .recv(t)?;
+
+            c.zero().sel2().sel2().send(Quit)?.close()?;
+
+            ok(r)
+        };
+
+        let srv_t = thread::spawn(move || srv(server_chan));
+        let cli_t = thread::spawn(move || cli(client_chan));
+
+        let sr = srv_t.join().unwrap();
+        let cr = cli_t.join().unwrap();
+
+        assert!(sr.is_ok());
+        assert_eq!(cr.unwrap(), 3);
     }
 }

@@ -22,7 +22,7 @@ use std::{
 // More like the original session_types library, encoding the protocol as nested
 // static types of receives and sends. Thus it doesn't require explicit agency,
 // since it shows exactly who is going to send the message.
-mod types;
+pub mod types;
 
 type DynMessage = Box<dyn Any + marker::Send + 'static>;
 
@@ -60,6 +60,10 @@ impl std::fmt::Display for SessionError {
 impl Error for SessionError {}
 
 pub type SessionResult<T> = Result<T, SessionError>;
+
+pub fn ok<T>(value: T) -> SessionResult<T> {
+    Ok(value)
+}
 
 fn downcast<T: 'static>(msg: DynMessage) -> SessionResult<T> {
     match msg.downcast::<T>() {

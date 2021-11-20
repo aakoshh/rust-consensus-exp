@@ -400,10 +400,70 @@ pub fn session_channel<A: Agency, P: HasDual>(
     (c1, c2)
 }
 
+/// This macro is convenient for server-like protocols of the form:
+///
+/// `Offer<A, Offer<B, Offer<C, ... >>>`
+///
+/// # Examples
+///
+/// Assume we have a protocol `Offer<Recv<u64, Eps>, Offer<Recv<String, Eps>,Eps>>>`
+/// we can use the `offer!` macro as follows:
+///
+/// ```rust
+/// extern crate session_types;
+/// use session_types::*;
+/// use std::thread::spawn;
+///
+/// fn srv(c: Chan<(), Offer<Recv<u64, Eps>, Offer<Recv<String, Eps>, Eps>>>) {
+///     offer! { c,
+///         Number => {
+///             let (c, n) = c.recv();
+///             assert_eq!(42, n);
+///             c.close();
+///         },
+///         String => {
+///             c.recv().0.close();
+///         },
+///         Quit => {
+///             c.close();
+///         }
+///     }
+/// }
+///
+/// fn cli(c: Chan<(), Choose<Send<u64, Eps>, Choose<Send<String, Eps>, Eps>>>) {
+///     c.sel1().send(42).close();
+/// }
+///
+/// fn main() {
+///     let (s, c) = session_channel();
+///     spawn(move|| cli(c));
+///     srv(s);
+/// }
+/// ```
+///
+/// The identifiers on the left-hand side of the arrows have no semantic
+/// meaning, they only provide a meaningful name for the reader.
+#[macro_export]
+macro_rules! offer {
+    (
+        $id:ident, $branch:ident => $code:expr, $($t:tt)+
+    ) => (
+        match $id.offer() {
+            $crate::Left($id) => $code,
+            $crate::Right($id) => offer!{ $id, $($t)+ }
+        }
+    );
+    (
+        $id:ident, $branch:ident => $code:expr
+    ) => (
+        $code
+    )
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::thread;
+    use std::{thread, time::Instant};
 
     mod ping_pong {
         use super::*;
@@ -481,5 +541,26 @@ mod test {
 
         assert!(sr.is_err());
         assert!(cr.is_err());
+    }
+
+    #[test]
+    fn greetings() {
+        struct Hail(String);
+        struct Greetings(String);
+        struct TimeRequest;
+        struct TimeResponse(Instant);
+        struct AddRequest1(u32);
+        struct AddRequest2(u32);
+        struct AddResponse(u32);
+        struct Quit;
+
+        type TimeProtocol = Recv<TimeRequest, Send<TimeResponse, Var<Z>>>;
+        type AddProtocol = Recv<AddRequest1, Recv<AddRequest2, Send<AddResponse, Var<Z>>>>;
+        type QuitProtocol = Recv<Quit, Eps>;
+
+        type Server =
+            Recv<Hail, Send<Greetings, Rec<Offer<TimeProtocol, Offer<AddProtocol, QuitProtocol>>>>>;
+
+        type Client = <Server as HasDual>::Dual;
     }
 }

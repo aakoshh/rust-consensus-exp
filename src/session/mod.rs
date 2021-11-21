@@ -38,6 +38,8 @@ pub enum SessionError {
     Disconnected,
     /// Did not receive a message within the timeout.
     Timeout,
+    /// Abort due to the a violation of some protocol constraints.
+    Abort(Box<dyn Error + Send + 'static>),
 }
 
 impl From<RecvError> for SessionError {

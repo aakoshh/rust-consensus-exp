@@ -1,6 +1,7 @@
 /// Inspired by https://github.com/Munksgaard/session-types
 /// See the parent module for more description.
 use std::{
+    error::Error,
     marker,
     marker::PhantomData,
     mem::ManuallyDrop,
@@ -187,6 +188,12 @@ impl<P, E> Chan<P, E> {
                 _phantom: PhantomData,
             }
         }
+    }
+
+    /// Close the channel and return an error due to some business logic violation.
+    pub fn abort<T, F: Error + marker::Send + 'static>(self, e: F) -> SessionResult<T> {
+        close_chan(self);
+        Err(SessionError::Abort(Box::new(e)))
     }
 }
 

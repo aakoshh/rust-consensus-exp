@@ -6,5 +6,6 @@
 #![feature(test)]
 extern crate test as etest;
 
-mod paxos;
-mod stm;
+pub mod paxos;
+pub mod session_types;
+pub mod stm;

@@ -24,6 +24,10 @@ use std::{
 // since it shows exactly who is going to send the message.
 pub mod types;
 
+// More like the Cardano typed protocols, where messages are transitions between
+// state machines where either the client or the server has agency.
+pub mod states;
+
 type DynMessage = Box<dyn Any + marker::Send + 'static>;
 
 #[derive(Debug)]

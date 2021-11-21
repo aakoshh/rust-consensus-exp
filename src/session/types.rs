@@ -362,6 +362,7 @@ mod test {
         pub struct Ping;
         pub struct Pong;
 
+        // NOTE: This verison doesn't include looping.
         pub type Server = Recv<Ping, Send<Pong, Eps>>;
         pub type Client = <Server as HasDual>::Dual;
     }
@@ -387,7 +388,8 @@ mod test {
         let srv_t = thread::spawn(move || srv(server_chan));
         let cli_t = thread::spawn(move || cli(client_chan));
 
-        let _ = (srv_t.join().unwrap(), cli_t.join().unwrap());
+        srv_t.join().unwrap().unwrap();
+        cli_t.join().unwrap().unwrap();
     }
 
     #[test]

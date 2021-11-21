@@ -6,6 +6,7 @@ use std::{
     marker::PhantomData,
     mem::ManuallyDrop,
     sync::mpsc::{self, Receiver, Sender},
+    thread,
     time::Duration,
 };
 
@@ -165,7 +166,9 @@ pub enum Branch<L, R> {
 /// returning `Ok(_)` without closing it first.
 impl<P, E> Drop for Chan<P, E> {
     fn drop(&mut self) {
-        panic!("Session channel prematurely dropped. Must call `.close()`.");
+        if !thread::panicking() {
+            panic!("Session channel prematurely dropped. Must call `.close()`.");
+        }
     }
 }
 

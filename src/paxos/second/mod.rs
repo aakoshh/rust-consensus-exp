@@ -1,9 +1,9 @@
-use crate::stm::queues::{tqueue::TQueue, TQueueLike};
-use crate::stm::{atomically, StmResult, TVar};
-use crate::{
+use crate::paxos::{
     BallotOrdinal, ClientRequest, Effect, Event, InstanceId, Paxos, PaxosMessage,
     PaxosMessageDetail, Vote,
 };
+use crate::stm::queues::{tqueue::TQueue, TQueueLike};
+use crate::stm::{atomically, StmResult, TVar};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::thread;

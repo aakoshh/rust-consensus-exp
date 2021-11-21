@@ -7,5 +7,5 @@
 extern crate test as etest;
 
 pub mod paxos;
-pub mod session;
+pub mod session_types;
 pub mod stm;

@@ -465,10 +465,10 @@ mod test {
                         c.zero()
                     },
                     Add => {
-                            let (c, AddRequest(a)) = c.recv(t)?;
-                            let (c, AddRequest(b)) = c.recv(t)?;
-                            let c = c.send(AddResponse(a + b))?;
-                            c.zero()
+                        let (c, AddRequest(a)) = c.recv(t)?;
+                        let (c, AddRequest(b)) = c.recv(t)?;
+                        let c = c.send(AddResponse(a + b))?;
+                        c.zero()
                     },
                     Quit => {
                         let (c, Quit) = c.recv(t)?;

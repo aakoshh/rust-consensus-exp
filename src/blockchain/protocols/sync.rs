@@ -125,14 +125,13 @@ impl<E: Era> Consumer<E> {
     }
     /// Protocol implementation for a consumer following a producer.
     pub fn sync_chain(&self, c: Chan<protocol::Client<E>, ()>) -> SessionResult<()> {
-        use messages::*;
         let t = Duration::from_secs(60);
         let mut c = c.enter();
         loop {
             c = self.intersect(c.sel1())?.zero();
 
             // Make it compile by quitting.
-            return c.sel2().sel2().sel2().send(Done)?.close();
+            return self.quit(c.sel2().sel2().sel2());
         }
     }
 
@@ -146,6 +145,10 @@ impl<E: Era> Consumer<E> {
 
     fn missing<R>(&self, c: SubChan<protocol::Missing<E>, R>) -> SessionResult<ZeroChan<R>> {
         todo!()
+    }
+
+    fn quit<R>(&self, c: SubChan<protocol::Quit, R>) -> SessionResult<()> {
+        c.send(messages::Done)?.close()
     }
 }
 
@@ -163,31 +166,44 @@ impl<E: Era + 'static> Producer<E> {
 
     /// Protocol implementation for the producer, feeding a consumer its longest chain.
     pub fn sync_chain(&self, c: Chan<protocol::Server<E>, ()>) -> SessionResult<()> {
-        use messages::*;
+        let mut c = c.enter();
         let t = Duration::from_secs(60);
-        let c = c.enter();
         loop {
-            offer! { c, t,
+            c = offer! { c, t,
                 Intersect => {
-                    let (c, FindIntersect(hashes)) = c.recv(t)?;
-                    todo!()
+                    self.intersect(c)?.zero()
                 },
                 Next => {
-                  let (c, RequestNext) = c.recv(t)?;
-                  todo!()
+                  self.next(c)?.zero()
                 },
                 Missing => {
-                  let (c, RequestInputs(hashes)) = c.recv(t)?;
-                  todo!()
+                  self.missing(c)?.zero()
                 },
                 Quit => {
-                  let (c, Done) = c.recv(t)?;
-                  c.close()?;
-                  break;
+                  return self.quit(c)
                 }
             }
         }
-        ok(())
+    }
+
+    fn intersect<R>(&self, c: Chan<protocol::Intersect<E>, R>) -> SessionResult<ZeroChan<R>> {
+        let (c, messages::FindIntersect(hashes)) = c.recv(Duration::ZERO)?;
+        todo!()
+    }
+
+    fn next<R>(&self, c: Chan<protocol::Next<E>, R>) -> SessionResult<ZeroChan<R>> {
+        let (c, messages::RequestNext) = c.recv(Duration::ZERO)?;
+        todo!()
+    }
+
+    fn missing<R>(&self, c: Chan<protocol::Missing<E>, R>) -> SessionResult<ZeroChan<R>> {
+        let (c, messages::RequestInputs(hashes)) = c.recv(Duration::ZERO)?;
+        todo!()
+    }
+
+    fn quit<R>(&self, c: Chan<protocol::Quit, R>) -> SessionResult<()> {
+        let (c, messages::Done) = c.recv(Duration::ZERO)?;
+        c.close()
     }
 }
 

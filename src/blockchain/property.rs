@@ -10,7 +10,7 @@ pub enum Crossing<P, C> {
 }
 
 pub trait HasHash<'a> {
-    type Hash: Into<CryptoHash>;
+    type Hash: Into<CryptoHash> + Send;
 
     fn hash(&self) -> Self::Hash;
 }

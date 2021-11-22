@@ -91,7 +91,8 @@ mod protocol {
     /// Receive a quit request to quit from the client.
     pub type Quit = Recv<Done, Eps>;
 
-    pub type Server<E: Era> = Rec<Offer<Intersect<E>, Offer<Next<E>, Offer<Missing<E>, Quit>>>>;
+    // NOTE: Not surrounding with `Rec` because we will use a single `.enter()` and never retrun to the base.
+    pub type Server<E: Era> = Offer<Intersect<E>, Offer<Next<E>, Offer<Missing<E>, Quit>>>;
 
     pub type Client<E: Era> = <Server<E> as HasDual>::Dual;
 }
@@ -102,12 +103,19 @@ struct Consumer<E: Era> {
 
 // Unfortunately the protocol is too complex and the Rust Analyzer just says `{unknown}`
 // for the variables with type `Client`. One workaround is to pass it to subroutines which
-// have simpler protocols, and return the channel at the spot where it has consumed all the steps,
-// and all we have to do is call `.zero()` on it.
-type SubChan<P: HasDual, R> = Chan<P::Dual, R>;
+// have simpler protocols.
 
-/// Channel that we can call `.zero()` on to return to the top level state.
-type ZeroChan<R> = Chan<Var<Z>, R>;
+/// Client top-channel, after calling `.enter()` or `.zero()`.
+type CChan0<E: Era> = CChan1<E, protocol::Server<E>>;
+
+/// Client sub-protocol channel.
+type CChan1<E: Era, P: HasDual> = Chan<P::Dual, (protocol::Client<E>, ())>;
+
+/// Server top-channel, after calling `.enter()` or `.zero()`.
+type SChan0<E: Era> = SChan1<E, protocol::Server<E>>;
+
+/// Server sub-protocol channel.
+type SChan1<E: Era, P> = Chan<P, (protocol::Server<E>, ())>;
 
 impl<E: Era> Consumer<E> {
     pub fn new() -> Consumer<E> {
@@ -116,30 +124,32 @@ impl<E: Era> Consumer<E> {
         }
     }
     /// Protocol implementation for a consumer following a producer.
-    pub fn sync_chain(&self, c: Chan<protocol::Client<E>, ()>) -> SessionResult<()> {
+    pub fn sync_chain(&self, c: Chan<Rec<protocol::Client<E>>, ()>) -> SessionResult<()> {
         let t = Duration::from_secs(60);
         let mut c = c.enter();
         loop {
-            c = self.intersect(c.sel1())?.zero();
+            c = self.intersect(c.skip0())?;
 
             // Make it compile by quitting.
-            return self.quit(c.sel2().sel2().sel2());
+            return self.quit(c.skip3());
         }
     }
 
-    fn intersect<R>(&self, c: SubChan<protocol::Intersect<E>, R>) -> SessionResult<ZeroChan<R>> {
+    fn intersect(&self, c: CChan1<E, protocol::Intersect<E>>) -> SessionResult<CChan0<E>> {
+        //let mut c = c;
+
         todo!()
     }
 
-    fn next<R>(&self, c: SubChan<protocol::Next<E>, R>) -> SessionResult<ZeroChan<R>> {
+    fn next(&self, c: CChan1<E, protocol::Next<E>>) -> SessionResult<CChan0<E>> {
         todo!()
     }
 
-    fn missing<R>(&self, c: SubChan<protocol::Missing<E>, R>) -> SessionResult<ZeroChan<R>> {
+    fn missing(&self, c: CChan1<E, protocol::Missing<E>>) -> SessionResult<CChan0<E>> {
         todo!()
     }
 
-    fn quit<R>(&self, c: SubChan<protocol::Quit, R>) -> SessionResult<()> {
+    fn quit(&self, c: CChan1<E, protocol::Quit>) -> SessionResult<()> {
         c.send(messages::Done)?.close()
     }
 }
@@ -157,19 +167,19 @@ impl<E: Era + 'static> Producer<E> {
     }
 
     /// Protocol implementation for the producer, feeding a consumer its longest chain.
-    pub fn sync_chain(&self, c: Chan<protocol::Server<E>, ()>) -> SessionResult<()> {
+    pub fn sync_chain(&self, c: Chan<Rec<protocol::Server<E>>, ()>) -> SessionResult<()> {
         let mut c = c.enter();
         let t = Duration::from_secs(60);
         loop {
             c = offer! { c, t,
                 Intersect => {
-                    self.intersect(c)?.zero()
+                    self.intersect(c)?
                 },
                 Next => {
-                  self.next(c)?.zero()
+                  self.next(c)?
                 },
                 Missing => {
-                  self.missing(c)?.zero()
+                  self.missing(c)?
                 },
                 Quit => {
                   return self.quit(c)
@@ -178,22 +188,22 @@ impl<E: Era + 'static> Producer<E> {
         }
     }
 
-    fn intersect<R>(&self, c: Chan<protocol::Intersect<E>, R>) -> SessionResult<ZeroChan<R>> {
+    fn intersect(&self, c: SChan1<E, protocol::Intersect<E>>) -> SessionResult<SChan0<E>> {
         let (c, messages::FindIntersect(hashes)) = c.recv(Duration::ZERO)?;
         todo!()
     }
 
-    fn next<R>(&self, c: Chan<protocol::Next<E>, R>) -> SessionResult<ZeroChan<R>> {
+    fn next(&self, c: SChan1<E, protocol::Next<E>>) -> SessionResult<SChan0<E>> {
         let (c, messages::RequestNext) = c.recv(Duration::ZERO)?;
         todo!()
     }
 
-    fn missing<R>(&self, c: Chan<protocol::Missing<E>, R>) -> SessionResult<ZeroChan<R>> {
+    fn missing(&self, c: SChan1<E, protocol::Missing<E>>) -> SessionResult<SChan0<E>> {
         let (c, messages::RequestInputs(hashes)) = c.recv(Duration::ZERO)?;
         todo!()
     }
 
-    fn quit<R>(&self, c: Chan<protocol::Quit, R>) -> SessionResult<()> {
+    fn quit(&self, c: SChan1<E, protocol::Quit>) -> SessionResult<()> {
         let (c, messages::Done) = c.recv(Duration::ZERO)?;
         c.close()
     }
@@ -205,14 +215,14 @@ mod test {
 
     use crate::{blockchain::eras::CoEra, session_types::session_channel};
 
-    use super::{messages::Done, protocol, Consumer, Producer};
+    use super::{messages::Done, Consumer, Producer};
 
     #[test]
     fn chain_sync() {
-        let (server_chan, client_chan) = session_channel::<protocol::Server<CoEra>>();
-
         let producer = Producer::<CoEra>::new();
         let consumer = Consumer::<CoEra>::new();
+
+        let (server_chan, client_chan) = session_channel();
 
         let srv_t = thread::spawn(move || producer.sync_chain(server_chan));
 

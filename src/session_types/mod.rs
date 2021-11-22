@@ -301,6 +301,32 @@ impl<P: Outgoing, Q: Outgoing, E> Chan<Choose<P, Q>, E> {
     }
 }
 
+impl<A: Outgoing, B: Outgoing, Z> Chan<Choose<A, B>, Z> {
+    pub fn skip0(self) -> Chan<A, Z> {
+        self.sel1()
+    }
+}
+
+impl<A: Outgoing, B: Outgoing, Z> Chan<Choose<A, B>, Z> {
+    pub fn skip1(self) -> Chan<B, Z> {
+        self.sel2()
+    }
+}
+
+impl<A: Outgoing, B: Outgoing, C: Outgoing, Z> Chan<Choose<A, Choose<B, C>>, Z> {
+    pub fn skip2(self) -> Chan<C, Z> {
+        self.sel2().sel2()
+    }
+}
+
+impl<A: Outgoing, B: Outgoing, C: Outgoing, D: Outgoing, Z>
+    Chan<Choose<A, Choose<B, Choose<C, D>>>, Z>
+{
+    pub fn skip3(self) -> Chan<D, Z> {
+        self.sel2().sel2().sel2()
+    }
+}
+
 impl<T: 'static, P, Q: Incoming, E> Chan<Offer<Recv<T, P>, Q>, E> {
     /// Put the value we pulled from the channel back,
     /// so the next protocol step can read it and use it.

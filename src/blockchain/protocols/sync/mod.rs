@@ -1,6 +1,5 @@
-use std::{marker::PhantomData, time::Duration};
-
-use crate::{blockchain::property::Era, offer, session_types::*};
+mod consumer;
+mod producer;
 
 mod messages {
 
@@ -94,119 +93,10 @@ mod protocol {
     // NOTE: Not surrounding with `Rec` because we will use a single `.enter()` and never retrun to the base.
     pub type Server<E: Era> = Offer<Intersect<E>, Offer<Next<E>, Offer<Missing<E>, Quit>>>;
 
+    // NOTE: Unfortunately the protocol is too complex and the Rust Analyzer just says `{unknown}`
+    // for the variables with type `Client`. One workaround is to pass it to subroutines which
+    // have simpler protocols.
     pub type Client<E: Era> = <Server<E> as HasDual>::Dual;
-}
-
-struct Consumer<E: Era> {
-    _phantom: PhantomData<E>,
-}
-
-// Unfortunately the protocol is too complex and the Rust Analyzer just says `{unknown}`
-// for the variables with type `Client`. One workaround is to pass it to subroutines which
-// have simpler protocols.
-
-/// Client top-channel, after calling `.enter()` or `.zero()`.
-type CChan0<E: Era> = CChan1<E, protocol::Server<E>>;
-
-/// Client sub-protocol channel.
-type CChan1<E: Era, P: HasDual> = Chan<P::Dual, (protocol::Client<E>, ())>;
-
-/// Server top-channel, after calling `.enter()` or `.zero()`.
-type SChan0<E: Era> = SChan1<E, protocol::Server<E>>;
-
-/// Server sub-protocol channel.
-type SChan1<E: Era, P> = Chan<P, (protocol::Server<E>, ())>;
-
-impl<E: Era> Consumer<E> {
-    pub fn new() -> Consumer<E> {
-        Consumer {
-            _phantom: PhantomData,
-        }
-    }
-    /// Protocol implementation for a consumer following a producer.
-    pub fn sync_chain(&self, c: Chan<Rec<protocol::Client<E>>, ()>) -> SessionResult<()> {
-        let t = Duration::from_secs(60);
-        let mut c = c.enter();
-        loop {
-            c = self.intersect(c.skip0())?;
-
-            // Make it compile by quitting.
-            return self.quit(c.skip3());
-        }
-    }
-
-    fn intersect(&self, c: CChan1<E, protocol::Intersect<E>>) -> SessionResult<CChan0<E>> {
-        //let mut c = c;
-
-        todo!()
-    }
-
-    fn next(&self, c: CChan1<E, protocol::Next<E>>) -> SessionResult<CChan0<E>> {
-        todo!()
-    }
-
-    fn missing(&self, c: CChan1<E, protocol::Missing<E>>) -> SessionResult<CChan0<E>> {
-        todo!()
-    }
-
-    fn quit(&self, c: CChan1<E, protocol::Quit>) -> SessionResult<()> {
-        c.send(messages::Done)?.close()
-    }
-}
-
-/// Implementation of the Server protocol, a.k.a. the Producer.
-struct Producer<E: Era> {
-    _phantom: PhantomData<E>,
-}
-
-impl<E: Era + 'static> Producer<E> {
-    pub fn new() -> Producer<E> {
-        Producer {
-            _phantom: PhantomData,
-        }
-    }
-
-    /// Protocol implementation for the producer, feeding a consumer its longest chain.
-    pub fn sync_chain(&self, c: Chan<Rec<protocol::Server<E>>, ()>) -> SessionResult<()> {
-        let mut c = c.enter();
-        let t = Duration::from_secs(60);
-        loop {
-            c = offer! { c, t,
-                Intersect => {
-                    self.intersect(c)?
-                },
-                Next => {
-                  self.next(c)?
-                },
-                Missing => {
-                  self.missing(c)?
-                },
-                Quit => {
-                  return self.quit(c)
-                }
-            }
-        }
-    }
-
-    fn intersect(&self, c: SChan1<E, protocol::Intersect<E>>) -> SessionResult<SChan0<E>> {
-        let (c, messages::FindIntersect(hashes)) = c.recv(Duration::ZERO)?;
-        todo!()
-    }
-
-    fn next(&self, c: SChan1<E, protocol::Next<E>>) -> SessionResult<SChan0<E>> {
-        let (c, messages::RequestNext) = c.recv(Duration::ZERO)?;
-        todo!()
-    }
-
-    fn missing(&self, c: SChan1<E, protocol::Missing<E>>) -> SessionResult<SChan0<E>> {
-        let (c, messages::RequestInputs(hashes)) = c.recv(Duration::ZERO)?;
-        todo!()
-    }
-
-    fn quit(&self, c: SChan1<E, protocol::Quit>) -> SessionResult<()> {
-        let (c, messages::Done) = c.recv(Duration::ZERO)?;
-        c.close()
-    }
 }
 
 #[cfg(test)]
@@ -215,7 +105,7 @@ mod test {
 
     use crate::{blockchain::eras::CoEra, session_types::session_channel};
 
-    use super::{messages::Done, Consumer, Producer};
+    use super::{consumer::Consumer, messages::Done, producer::Producer};
 
     #[test]
     fn chain_sync() {

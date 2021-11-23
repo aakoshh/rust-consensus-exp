@@ -67,7 +67,7 @@ impl<'a> property::HasHash<'a> for Transaction {
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Hash, Eq)]
 pub struct BlockHash(pub CryptoHash);
 
 impl From<BlockHash> for CryptoHash {

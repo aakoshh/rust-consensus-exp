@@ -15,6 +15,14 @@ pub enum Crossing<P, C> {
     Curr(C),
 }
 
+/// Unwrap the current value when there is no previous possibility.
+pub fn uncross<C>(c: Crossing<!, C>) -> C {
+    match c {
+        Crossing::Curr(c) => c,
+        Crossing::Prev(_) => unreachable!(),
+    }
+}
+
 pub trait HasHash<'a> {
     type Hash: Into<CryptoHash> + Send + PartialEq + Debug;
 

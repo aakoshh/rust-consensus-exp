@@ -6,5 +6,5 @@ mod property;
 mod protocols;
 mod store;
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Hash, Eq)]
 pub struct CryptoHash([u8; 32]);

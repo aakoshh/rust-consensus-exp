@@ -1,16 +1,22 @@
+use std::fmt::Debug;
+
 use super::CryptoHash;
+
+/// The rank, or distance from the genesis block.
+/// The genesis block has height 0.
+pub type Height = u64;
 
 /// An "either" type for things that can cross two eras,
 /// like the parent hash of a block, it may be pointing
 /// at a parent in the previous era.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum Crossing<P, C> {
     Prev(P),
     Curr(C),
 }
 
 pub trait HasHash<'a> {
-    type Hash: Into<CryptoHash> + Send;
+    type Hash: Into<CryptoHash> + Send + PartialEq + Debug;
 
     fn hash(&self) -> Self::Hash;
 }
@@ -59,11 +65,11 @@ pub trait HasTransactions<'a> {
 /// that we already have the input header if it's the same as the ranking block
 /// itself. The storage for ranking blocks and input headers can then be the same.
 pub trait RankingBlock<'a>: HasHash<'a> {
-    type PrevEraHash;
+    type PrevEraHash: PartialEq + Debug;
     type InputBlockHash;
 
     fn parent_hash(&self) -> Crossing<Self::PrevEraHash, Self::Hash>;
-    fn height(&self) -> u64;
+    fn height(&self) -> Height;
     fn input_block_hashes(&self) -> Vec<Self::InputBlockHash>;
 }
 
@@ -90,10 +96,10 @@ pub trait Era {
 
     /// The ranking blocks refer to input blocks by their hashes.
     /// This could be a self-reference.
-    type RankingBlock<'a>: RankingBlock<
-        'a,
-        InputBlockHash = <Self::InputBlock<'a> as HasHash<'a>>::Hash,
-    >;
+    type RankingBlock<'a>: RankingBlock<'a, InputBlockHash = <Self::InputBlock<'a> as HasHash<'a>>::Hash>
+        + Clone
+        + Send
+        + Sync;
 
     /// The ledger accepts transactions, but it can also contain data
     /// to validate ranking blocks, e.g. PoS stake distribution.

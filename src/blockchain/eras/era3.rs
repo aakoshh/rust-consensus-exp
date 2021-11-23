@@ -52,10 +52,10 @@ impl<'a> property::Ledger<'a> for Ledger {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct InputBlockHash(CryptoHash);
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct RankingBlockHash(CryptoHash);
 
 impl From<RankingBlockHash> for CryptoHash {
@@ -70,6 +70,7 @@ impl From<InputBlockHash> for CryptoHash {
     }
 }
 
+#[derive(Clone)]
 pub struct RankingBlock {
     pub parent_hash: Crossing<era2::RankingBlockHash, RankingBlockHash>,
     pub epoch_id: EpochId,

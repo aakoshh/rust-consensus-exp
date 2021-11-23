@@ -1,15 +1,16 @@
 mod consumer;
 mod producer;
+mod state;
 
 mod messages {
 
     use crate::blockchain::{
         property::*,
-        protocols::{InputBlockHash, InputBlockHeader, RankingBlockHash},
+        protocols::{EraInputBlockHash, EraInputBlockHeader, EraRankingBlock, EraRankingBlockHash},
     };
 
     /// Ask the producer to find the newest point that exists on its blockchain.
-    pub struct FindIntersect<E: Era>(pub Vec<RankingBlockHash<E>>);
+    pub struct FindIntersect<E: Era>(pub Vec<EraRankingBlockHash<E>>);
 
     /// Tell the consumer about the first point that can be found on the producer's chain.
     /// They can start consuming from here, or try to find further points.
@@ -17,7 +18,7 @@ mod messages {
     /// up with a `RequestNext` message will go from here. But the consumer can also
     /// send further `FindIntersect` messages, bisecting until the best possible match
     /// is found; the better results will adjust the read pointer.
-    pub struct IntersectFound<E: Era>(pub RankingBlockHash<E>);
+    pub struct IntersectFound<E: Era>(pub EraRankingBlockHash<E>);
 
     /// Tell the consumer that none of the identifiers in `FindIntersect` are known.
     pub struct IntersectNotFound;
@@ -32,10 +33,10 @@ mod messages {
     /// Tell the consumer to extend its chain with the next connecting ranking block.
     /// The ranking block is small, it could be the header of a traditional block,
     /// or a dedicated block type.
-    pub struct RollForward<E: Era>(pub E::RankingBlock<'static>);
+    pub struct RollForward<E: Era>(pub EraRankingBlock<E>);
 
     /// Tell the consumer to an earlier block hash.
-    pub struct RollBackward<E: Era>(pub RankingBlockHash<E>);
+    pub struct RollBackward<E: Era>(pub EraRankingBlockHash<E>);
 
     /// Ask the producer to send a list of missing input block headers.
     /// The consumer should only ask for inputs that they don't have after
@@ -53,14 +54,14 @@ mod messages {
     /// Another motivation to do this was that the Rust Analyzer was unable
     /// to deal with the complexity of the `Next` protocol if notifications
     /// were included.
-    pub struct RequestInputs<E: Era>(pub Vec<InputBlockHash<E>>);
+    pub struct RequestInputs<E: Era>(pub Vec<EraInputBlockHash<E>>);
 
     /// The producer responds to the consumer with the missing inputs block headers.
     /// The response contains the headers for the hashes the consumer asked for in
     /// the preceding `RequestInputs`. Since the producer earlier sent a ranking block
     /// that referenced these, it must have all the inputs as well, so the number of
     /// items must be exactly the same.
-    pub struct ReplyInputs<E: Era>(pub Vec<InputBlockHeader<E>>);
+    pub struct ReplyInputs<E: Era>(pub Vec<EraInputBlockHeader<E>>);
 
     /// Terminate the protocol.
     pub struct Done;
@@ -103,18 +104,49 @@ mod protocol {
 mod test {
     use std::thread;
 
-    use crate::{blockchain::eras::CoEra, session_types::session_channel};
+    use crate::{
+        blockchain::{
+            ecdsa::{PublicKey, Signature},
+            eras::{CoEra, Eras},
+            protocols::EraRankingBlock,
+            CryptoHash,
+        },
+        session_types::session_channel,
+    };
 
-    use super::{consumer::Consumer, messages::Done, producer::Producer};
+    use super::{consumer::Consumer, messages::Done, producer::Producer, state::ChainState};
+
+    fn make_genesis() -> EraRankingBlock<CoEra> {
+        use crate::blockchain::eras::era1::*;
+        let h = BlockHeader {
+            parent_hash: BlockHash(CryptoHash([0; 32])),
+            epoch_id: 0,
+            slot_id: 0,
+            height: 0,
+            content_hash: CryptoHash([0; 32]),
+            validator_id: ValidatorId(PublicKey([0; 64])),
+            signature: Signature::new([0; 65]),
+        };
+        Eras::Era1(h)
+    }
 
     #[test]
     fn chain_sync() {
-        let producer = Producer::<CoEra>::new();
-        let consumer = Consumer::<CoEra>::new();
+        let genesis = make_genesis();
+
+        // TODO: Add some blocks to the consumer state, and some others to the consumer,
+        // so they are on different forks initially.
+        let producer_state = ChainState::new(genesis.clone(), vec![]);
+        let consumer_state = ChainState::new(genesis.clone(), vec![]);
+
+        let producer = Producer::<CoEra>::new(producer_state);
+        let consumer = Consumer::<CoEra>::new(consumer_state);
 
         let (server_chan, client_chan) = session_channel();
 
         let srv_t = thread::spawn(move || producer.sync_chain(server_chan));
+
+        // TODO: Add blocks to the producer state. Check that they make their way into the consumer state.
 
         client_chan
             .enter()

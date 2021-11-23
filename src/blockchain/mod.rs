@@ -5,5 +5,5 @@ mod eras;
 mod property;
 mod protocols;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct CryptoHash([u8; 32]);

@@ -2,7 +2,7 @@ use super::property::HasHash;
 use std::marker::PhantomData;
 
 #[derive(Clone)]
-pub struct PrivateKey([u8; 32]);
+pub struct PrivateKey(pub [u8; 32]);
 
 impl PrivateKey {
     pub fn sign<'a, K: Into<PublicKey>, T: HasHash<'a>>(&self, data: &'a T) -> Signature<K, T> {
@@ -11,7 +11,7 @@ impl PrivateKey {
 }
 
 #[derive(Clone)]
-pub struct PublicKey([u8; 64]);
+pub struct PublicKey(pub [u8; 64]);
 
 #[derive(Clone)]
 pub struct Signature<K, T>([u8; 65], PhantomData<K>, PhantomData<T>);

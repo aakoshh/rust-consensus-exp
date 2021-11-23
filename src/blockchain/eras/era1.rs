@@ -41,6 +41,7 @@ impl<'a> property::Ledger<'a> for Ledger {
     }
 }
 
+#[derive(PartialEq, Clone, Debug)]
 pub struct TransactionHash(CryptoHash);
 
 impl From<TransactionHash> for CryptoHash {
@@ -66,8 +67,8 @@ impl<'a> property::HasHash<'a> for Transaction {
     }
 }
 
-#[derive(Clone)]
-pub struct BlockHash(CryptoHash);
+#[derive(Clone, PartialEq, Debug)]
+pub struct BlockHash(pub CryptoHash);
 
 impl From<BlockHash> for CryptoHash {
     fn from(h: BlockHash) -> Self {
@@ -76,7 +77,13 @@ impl From<BlockHash> for CryptoHash {
 }
 
 #[derive(Clone)]
-pub struct ValidatorId(PublicKey);
+pub struct ValidatorId(pub PublicKey);
+
+impl From<ValidatorId> for PublicKey {
+    fn from(v: ValidatorId) -> Self {
+        v.0
+    }
+}
 
 #[derive(Clone)]
 pub struct BlockHeader {

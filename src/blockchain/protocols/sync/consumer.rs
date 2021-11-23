@@ -5,6 +5,7 @@ use crate::{
     session_types::{Chan, HasDual, Rec, SessionResult},
 };
 
+use super::state::ChainState;
 use super::{messages, protocol};
 
 /// Client top-channel, after calling `.enter()` or `.zero()`.
@@ -13,13 +14,17 @@ type CChan0<E: Era> = CChan1<E, protocol::Server<E>>;
 /// Client sub-protocol channel.
 type CChan1<E: Era, P: HasDual> = Chan<P::Dual, (protocol::Client<E>, ())>;
 
+/// Implementation of the Client protocol, a.k.a. the Consumer.
 pub struct Consumer<E: Era> {
+    /// Track the state of the producer.
+    chain_state: ChainState<E>,
     _phantom: PhantomData<E>,
 }
 
 impl<E: Era> Consumer<E> {
-    pub fn new() -> Consumer<E> {
+    pub fn new(chain_state: ChainState<E>) -> Consumer<E> {
         Consumer {
+            chain_state,
             _phantom: PhantomData,
         }
     }

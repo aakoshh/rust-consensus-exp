@@ -15,11 +15,11 @@ use super::{
 #[macro_use]
 mod coprod;
 
-mod era1;
-mod era2;
-mod era3;
+pub mod era1;
+pub mod era2;
+pub mod era3;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum Eras<E1, E2, E3> {
     Era1(E1),
     Era2(E2),

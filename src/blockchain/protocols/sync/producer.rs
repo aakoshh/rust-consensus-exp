@@ -1,16 +1,17 @@
-use std::{marker::PhantomData, time::Duration};
+use std::time::Duration;
 
 use crate::{
     blockchain::{
         property::{Era, Height},
         protocols::sync::messages,
+        store::{BlockStore, ChainStore},
     },
     offer,
     session_types::{Chan, Rec, SessionResult},
     stm::TVar,
 };
 
-use super::{protocol, state::ChainState};
+use super::protocol;
 
 /// Server top-channel, after calling `.enter()` or `.zero()`.
 type SChan0<E: Era> = SChan1<E, protocol::Server<E>>;
@@ -19,9 +20,9 @@ type SChan0<E: Era> = SChan1<E, protocol::Server<E>>;
 type SChan1<E: Era, P> = Chan<P, (protocol::Server<E>, ())>;
 
 /// Implementation of the Server protocol, a.k.a. the Producer.
-pub struct Producer<E: Era> {
+pub struct Producer<E: Era, S> {
     /// The state of the producer, which it feeds to the consumer.
-    chain_state: ChainState<E>,
+    chain_state: ChainStore<E, S>,
     /// Remember the last height we have relayed to the consumer.
     /// Give them the next block when they ask, unless we have to
     /// roll back first.
@@ -29,16 +30,14 @@ pub struct Producer<E: Era> {
     /// If true, next time the consumer checks in we have to tell
     /// them to roll back, because the `read_pointer` went backwards.
     has_rolled_back: TVar<bool>,
-    _phantom: PhantomData<E>,
 }
 
-impl<E: Era + 'static> Producer<E> {
-    pub fn new(chain_state: ChainState<E>) -> Producer<E> {
+impl<E: Era + 'static, S: BlockStore<E>> Producer<E, S> {
+    pub fn new(chain_state: ChainStore<E, S>) -> Producer<E, S> {
         Producer {
             chain_state,
             read_pointer: TVar::new(0),
             has_rolled_back: TVar::new(false),
-            _phantom: PhantomData,
         }
     }
 

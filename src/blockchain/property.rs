@@ -105,3 +105,8 @@ pub trait Era {
     /// to validate ranking blocks, e.g. PoS stake distribution.
     type Ledger<'a>: Ledger<'a, Transaction = Self::Transaction<'a>>;
 }
+
+pub type EraRankingBlock<E: Era> = E::RankingBlock<'static>;
+pub type EraRankingBlockHash<E: Era> = <E::RankingBlock<'static> as HasHash<'static>>::Hash;
+pub type EraInputBlockHash<E: Era> = <E::InputBlock<'static> as HasHash<'static>>::Hash;
+pub type EraInputBlockHeader<E: Era> = <E::InputBlock<'static> as HasHeader>::Header;

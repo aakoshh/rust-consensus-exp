@@ -1,11 +1,13 @@
-use std::{marker::PhantomData, time::Duration};
+use std::time::Duration;
 
 use crate::{
-    blockchain::property::Era,
+    blockchain::{
+        property::Era,
+        store::{BlockStore, ChainStore},
+    },
     session_types::{Chan, HasDual, Rec, SessionResult},
 };
 
-use super::state::ChainState;
 use super::{messages, protocol};
 
 /// Client top-channel, after calling `.enter()` or `.zero()`.
@@ -15,18 +17,14 @@ type CChan0<E: Era> = CChan1<E, protocol::Server<E>>;
 type CChan1<E: Era, P: HasDual> = Chan<P::Dual, (protocol::Client<E>, ())>;
 
 /// Implementation of the Client protocol, a.k.a. the Consumer.
-pub struct Consumer<E: Era> {
+pub struct Consumer<E: Era, S> {
     /// Track the state of the producer.
-    chain_state: ChainState<E>,
-    _phantom: PhantomData<E>,
+    chain_store: ChainStore<E, S>,
 }
 
-impl<E: Era> Consumer<E> {
-    pub fn new(chain_state: ChainState<E>) -> Consumer<E> {
-        Consumer {
-            chain_state,
-            _phantom: PhantomData,
-        }
+impl<E: Era, S: BlockStore<E>> Consumer<E, S> {
+    pub fn new(chain_store: ChainStore<E, S>) -> Consumer<E, S> {
+        Consumer { chain_store }
     }
     /// Protocol implementation for a consumer following a producer.
     pub fn sync_chain(&self, c: Chan<Rec<protocol::Client<E>>, ()>) -> SessionResult<()> {

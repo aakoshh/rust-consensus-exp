@@ -1,8 +1,8 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use crate::{
     blockchain::{
-        property::{Era, Height},
+        property::{Era, EraRankingBlock},
         protocols::sync::messages,
         store::{BlockStore, ChainStore},
     },
@@ -22,22 +22,25 @@ type SChan1<E: Era, P> = Chan<P, (protocol::Server<E>, ())>;
 /// Implementation of the Server protocol, a.k.a. the Producer.
 pub struct Producer<E: Era, S> {
     /// The state of the producer, which it feeds to the consumer.
-    chain_state: ChainStore<E, S>,
-    /// Remember the last height we have relayed to the consumer.
+    ///
+    /// It is wrapped in an `Arc` because this is the main chain
+    /// instance for this node, shared between all producers.
+    /// They can await changes via STM and send them to their
+    /// respective consumers; but the chainge is initiated by
+    /// the sync control thread that switches between forks.
+    chain_state: Arc<ChainStore<E, S>>,
+    /// Remember the last header we have relayed to the consumer.
     /// Give them the next block when they ask, unless we have to
     /// roll back first.
-    read_pointer: TVar<Height>,
-    /// If true, next time the consumer checks in we have to tell
-    /// them to roll back, because the `read_pointer` went backwards.
-    has_rolled_back: TVar<bool>,
+    read_pointer: TVar<EraRankingBlock<E>>,
 }
 
 impl<E: Era + 'static, S: BlockStore<E>> Producer<E, S> {
-    pub fn new(chain_state: ChainStore<E, S>) -> Producer<E, S> {
+    pub fn new(chain_state: Arc<ChainStore<E, S>>) -> Producer<E, S> {
+        let genesis = chain_state.genesis().to_owned();
         Producer {
             chain_state,
-            read_pointer: TVar::new(0),
-            has_rolled_back: TVar::new(false),
+            read_pointer: TVar::new(genesis),
         }
     }
 

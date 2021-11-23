@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use crate::{
     blockchain::{
@@ -19,11 +19,16 @@ type CChan1<E: Era, P: HasDual> = Chan<P::Dual, (protocol::Client<E>, ())>;
 /// Implementation of the Client protocol, a.k.a. the Consumer.
 pub struct Consumer<E: Era, S> {
     /// Track the state of the producer.
-    chain_store: ChainStore<E, S>,
+    ///
+    /// It's wrapped in `Arc` because the chain store is also part of an STM map
+    /// that contains all peer's chain stores, so that a sync control thread can
+    /// see all state at once and can make overall decisions on which blocks
+    /// to download.
+    chain_store: Arc<ChainStore<E, S>>,
 }
 
 impl<E: Era, S: BlockStore<E>> Consumer<E, S> {
-    pub fn new(chain_store: ChainStore<E, S>) -> Consumer<E, S> {
+    pub fn new(chain_store: Arc<ChainStore<E, S>>) -> Consumer<E, S> {
         Consumer { chain_store }
     }
     /// Protocol implementation for a consumer following a producer.

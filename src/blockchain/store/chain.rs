@@ -36,6 +36,10 @@ impl<E: Era + 'static, S: BlockStore<E>> ChainStore<E, S> {
         self.tip.read()
     }
 
+    pub fn genesis(&self) -> &EraRankingBlock<E> {
+        &self.genesis
+    }
+
     /// Roll back to a given block hash.
     ///
     /// Return `false` if the hash is unknown, `true` if we successfully rolled back.

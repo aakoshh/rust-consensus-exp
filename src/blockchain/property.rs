@@ -23,24 +23,24 @@ pub fn uncross<C>(c: Crossing<!, C>) -> C {
     }
 }
 
-pub trait HasHash<'a> {
+pub trait HasHash {
     type Hash: Into<CryptoHash> + Send + Sync + PartialEq + Eq + Debug + std::hash::Hash + Clone;
 
     fn hash(&self) -> Self::Hash;
 }
 
-pub trait HasHeader<'a> {
-    type Header: HasHash<'a> + Clone + Sync + Send;
+pub trait HasHeader {
+    type Header: HasHash + Clone + Sync + Send;
 
     fn header(&self) -> Self::Header;
 }
 
 /// Derive `HasHash` for things that have a header which has a hash.
-impl<'a, B> HasHash<'a> for B
+impl<B> HasHash for B
 where
-    B: HasHeader<'a>,
+    B: HasHeader,
 {
-    type Hash = <<B as HasHeader<'a>>::Header as HasHash<'a>>::Hash;
+    type Hash = <<B as HasHeader>::Header as HasHash>::Hash;
 
     fn hash(&self) -> Self::Hash {
         self.header().hash()
@@ -71,7 +71,7 @@ pub trait HasTransactions<'a> {
 /// block header, and the input block to be the full block. We can somehow detect
 /// that we already have the input header if it's the same as the ranking block
 /// itself. The storage for ranking blocks and input headers can then be the same.
-pub trait RankingBlock<'a>: HasHash<'a> {
+pub trait RankingBlock: HasHash {
     type PrevEraHash: PartialEq + Debug;
     type InputBlockHash;
 
@@ -97,11 +97,11 @@ pub trait Era {
     type Transaction<'a>;
 
     /// Input block carry the transactions.
-    type InputBlock<'a>: HasHeader<'a> + HasTransactions<'a, Transaction = Self::Transaction<'a>>;
+    type InputBlock<'a>: HasHeader + HasTransactions<'a, Transaction = Self::Transaction<'a>>;
 
     /// The ranking blocks refer to input blocks by their hashes.
     /// This could be a self-reference.
-    type RankingBlock<'a>: RankingBlock<'a, InputBlockHash = <Self::InputBlock<'a> as HasHash<'a>>::Hash>
+    type RankingBlock: RankingBlock<InputBlockHash = <Self::InputBlock<'static> as HasHash>::Hash>
         + Clone
         + Send
         + Sync;
@@ -111,7 +111,7 @@ pub trait Era {
     type Ledger<'a>: Ledger<'a, Transaction = Self::Transaction<'a>>;
 }
 
-pub type EraRankingBlock<E: Era> = E::RankingBlock<'static>;
-pub type EraRankingBlockHash<E: Era> = <E::RankingBlock<'static> as HasHash<'static>>::Hash;
-pub type EraInputBlockHash<E: Era> = <E::InputBlock<'static> as HasHash<'static>>::Hash;
-pub type EraInputBlockHeader<E: Era> = <E::InputBlock<'static> as HasHeader<'static>>::Header;
+pub type EraRankingBlock<E: Era> = E::RankingBlock;
+pub type EraRankingBlockHash<E: Era> = <E::RankingBlock as HasHash>::Hash;
+pub type EraInputBlockHash<E: Era> = <E::InputBlock<'static> as HasHash>::Hash;
+pub type EraInputBlockHeader<E: Era> = <E::InputBlock<'static> as HasHeader>::Header;

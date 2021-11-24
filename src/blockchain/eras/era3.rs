@@ -81,7 +81,7 @@ pub struct RankingBlock {
     pub signature: Signature<ValidatorId, RankingBlock>,
 }
 
-impl<'a> property::HasHash<'a> for RankingBlock {
+impl property::HasHash for RankingBlock {
     type Hash = RankingBlockHash;
 
     fn hash(&self) -> Self::Hash {
@@ -89,7 +89,7 @@ impl<'a> property::HasHash<'a> for RankingBlock {
     }
 }
 
-impl<'a> property::RankingBlock<'a> for RankingBlock {
+impl property::RankingBlock for RankingBlock {
     type PrevEraHash = era2::RankingBlockHash;
     type InputBlockHash = InputBlockHash;
 
@@ -131,7 +131,7 @@ impl InputBlockHeader {
     }
 }
 
-impl<'a> property::HasHash<'a> for InputBlockHeader {
+impl property::HasHash for InputBlockHeader {
     type Hash = InputBlockHash;
 
     fn hash(&self) -> Self::Hash {
@@ -144,7 +144,7 @@ pub struct InputBlock {
     pub transactions: Vec<Transaction>,
 }
 
-impl<'a> property::HasHeader<'a> for InputBlock {
+impl property::HasHeader for InputBlock {
     type Header = InputBlockHeader;
 
     fn header(&self) -> Self::Header {
@@ -166,7 +166,7 @@ impl<'a> property::HasTransactions<'a> for InputBlock {
 pub struct Era3;
 
 impl property::Era for Era3 {
-    type RankingBlock<'a> = RankingBlock;
+    type RankingBlock = RankingBlock;
     type InputBlock<'a> = InputBlock;
     type Transaction<'a> = Transaction;
     type Ledger<'a> = Ledger;

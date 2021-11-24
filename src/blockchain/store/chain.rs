@@ -18,10 +18,10 @@ pub struct ChainStore<E: Era, S> {
 
 impl<E: Era + 'static, S: BlockStore<E>> ChainStore<E, S> {
     pub fn new(block_store: S) -> ChainStore<E, S> {
+        // `ChainStore` represents a full chain, so it is expected to be called with a non-empty block store.
         let (genesis, tip) = atomically(|| {
-            let h = block_store.max_height()?;
-            let t = block_store.get_ranking_block_by_height(h)?;
-            let g = block_store.get_ranking_block_by_height(0)?;
+            let g = block_store.first_ranking_block()?;
+            let t = block_store.last_ranking_block()?;
             Ok((g.unwrap(), t.unwrap()))
         });
 
@@ -55,8 +55,12 @@ impl<E: Era + 'static, S: BlockStore<E>> ChainStore<E, S> {
 
 /// A `ChainStore` is a facade for the `BlockStore`, while also maintaining the tip.
 impl<E: Era + 'static, S: BlockStore<E>> BlockStore<E> for ChainStore<E, S> {
-    fn max_height(&self) -> StmResult<Height> {
-        self.tip.read().map(|b| b.height())
+    fn first_ranking_block(&self) -> StmResult<Option<EraRankingBlock<E>>> {
+        Ok(Some(self.genesis.clone()))
+    }
+
+    fn last_ranking_block(&self) -> StmResult<Option<EraRankingBlock<E>>> {
+        self.tip.read().map(|t| Some(t.as_ref().clone()))
     }
 
     fn add_ranking_block(&self, b: EraRankingBlock<E>) -> StmResult<()> {

@@ -58,7 +58,7 @@ pub struct Transaction {
     pub signature: Signature<AccountId, Transaction>,
 }
 
-impl<'a> property::HasHash<'a> for Transaction {
+impl property::HasHash for Transaction {
     type Hash = TransactionHash;
 
     fn hash(&self) -> Self::Hash {
@@ -96,7 +96,7 @@ pub struct BlockHeader {
     pub signature: Signature<ValidatorId, BlockHeader>,
 }
 
-impl<'a> property::HasHash<'a> for BlockHeader {
+impl property::HasHash for BlockHeader {
     type Hash = BlockHash;
 
     fn hash(&self) -> Self::Hash {
@@ -108,7 +108,7 @@ impl<'a> property::HasHash<'a> for BlockHeader {
 /// we can treat ranking blocks as small blocks, as if they were the traditional
 /// headers, and treat input blocks as full.
 ///
-impl<'a> property::RankingBlock<'a> for BlockHeader {
+impl property::RankingBlock for BlockHeader {
     type PrevEraHash = !;
     type InputBlockHash = BlockHash;
 
@@ -130,7 +130,7 @@ pub struct Block {
     pub transactions: Vec<Transaction>,
 }
 
-impl<'a> property::HasHeader<'a> for Block {
+impl property::HasHeader for Block {
     type Header = BlockHeader;
 
     fn header(&self) -> Self::Header {
@@ -153,7 +153,7 @@ pub struct Era1;
 
 impl property::Era for Era1 {
     type Transaction<'a> = Transaction;
-    type RankingBlock<'a> = BlockHeader;
+    type RankingBlock = BlockHeader;
     type InputBlock<'a> = Block;
     type Ledger<'a> = Ledger;
 }

@@ -45,29 +45,13 @@ type CoInputBlock<'a> = Eras<
     <Era3 as Era>::InputBlock<'a>,
 >;
 
-type CoRankingBlock<'a> = Eras<
-    <Era1 as Era>::RankingBlock<'a>,
-    <Era2 as Era>::RankingBlock<'a>,
-    <Era3 as Era>::RankingBlock<'a>,
->;
+type CoRankingBlock = Eras<era1::BlockHeader, era2::RankingBlock, era3::RankingBlock>;
 
-type CoRankingBlockHash<'a> = Eras<
-    <<Era1 as Era>::RankingBlock<'a> as HasHash<'a>>::Hash,
-    <<Era2 as Era>::RankingBlock<'a> as HasHash<'a>>::Hash,
-    <<Era3 as Era>::RankingBlock<'a> as HasHash<'a>>::Hash,
->;
+type CoRankingBlockHash = Eras<era1::BlockHash, era2::RankingBlockHash, era3::RankingBlockHash>;
 
-type CoInputBlockHash<'a> = Eras<
-    <<Era1 as Era>::InputBlock<'a> as HasHash<'a>>::Hash,
-    <<Era2 as Era>::InputBlock<'a> as HasHash<'a>>::Hash,
-    <<Era3 as Era>::InputBlock<'a> as HasHash<'a>>::Hash,
->;
+type CoInputBlockHash = Eras<era1::BlockHash, era2::InputBlockHash, era3::InputBlockHash>;
 
-type CoInputBlockHeader<'a> = Eras<
-    <<Era1 as Era>::InputBlock<'a> as HasHeader<'a>>::Header,
-    <<Era2 as Era>::InputBlock<'a> as HasHeader<'a>>::Header,
-    <<Era3 as Era>::InputBlock<'a> as HasHeader<'a>>::Header,
->;
+type CoInputBlockHeader = Eras<era1::BlockHeader, era2::InputBlockHeader, era3::InputBlockHeader>;
 
 type CoLedger<'a> =
     Eras<<Era1 as Era>::Ledger<'a>, <Era2 as Era>::Ledger<'a>, <Era3 as Era>::Ledger<'a>>;
@@ -78,28 +62,28 @@ type CoLedgerError<'a> = Eras<
     <<Era3 as Era>::Ledger<'a> as Ledger<'a>>::Error,
 >;
 
-impl<'a> From<CoInputBlockHash<'a>> for CryptoHash {
-    fn from(hash: CoInputBlockHash<'a>) -> Self {
+impl From<CoInputBlockHash> for CryptoHash {
+    fn from(hash: CoInputBlockHash) -> Self {
         hash.fold_into(|h| h.into(), |h| h.into(), |h| h.into())
     }
 }
 
-impl<'a> From<CoRankingBlockHash<'a>> for CryptoHash {
-    fn from(hash: CoRankingBlockHash<'a>) -> Self {
+impl From<CoRankingBlockHash> for CryptoHash {
+    fn from(hash: CoRankingBlockHash) -> Self {
         hash.fold_into(|h| h.into(), |h| h.into(), |h| h.into())
     }
 }
 
-impl<'a> HasHash<'a> for CoInputBlockHeader<'a> {
-    type Hash = CoInputBlockHash<'a>;
+impl HasHash for CoInputBlockHeader {
+    type Hash = CoInputBlockHash;
 
     fn hash(&self) -> Self::Hash {
         self.map(|h| h.hash(), |h| h.hash(), |h| h.hash())
     }
 }
 
-impl<'a> HasHeader<'a> for CoInputBlock<'_> {
-    type Header = CoInputBlockHeader<'a>;
+impl HasHeader for CoInputBlock<'_> {
+    type Header = CoInputBlockHeader;
 
     fn header(&self) -> Self::Header {
         self.map(|b| b.header(), |b| b.header(), |b| b.header())
@@ -132,17 +116,17 @@ impl<'a> HasTransactions<'a> for CoInputBlock<'a> {
     }
 }
 
-impl<'a> HasHash<'a> for CoRankingBlock<'a> {
-    type Hash = CoRankingBlockHash<'a>;
+impl HasHash for CoRankingBlock {
+    type Hash = CoRankingBlockHash;
 
     fn hash(&self) -> Self::Hash {
         self.map(|h| h.hash(), |h| h.hash(), |h| h.hash())
     }
 }
 
-impl<'a> RankingBlock<'a> for CoRankingBlock<'a> {
+impl RankingBlock for CoRankingBlock {
     type PrevEraHash = !;
-    type InputBlockHash = CoInputBlockHash<'a>;
+    type InputBlockHash = CoInputBlockHash;
 
     fn parent_hash(&self) -> Crossing<Self::PrevEraHash, Self::Hash> {
         let parent_hash = match self {
@@ -224,6 +208,6 @@ pub struct CoEra;
 impl Era for CoEra {
     type Transaction<'a> = CoTransaction<'a>;
     type InputBlock<'a> = CoInputBlock<'a>;
-    type RankingBlock<'a> = CoRankingBlock<'a>;
+    type RankingBlock = CoRankingBlock;
     type Ledger<'a> = CoLedger<'a>;
 }

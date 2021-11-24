@@ -1,9 +1,9 @@
 use crate::{
     blockchain::{
-        eras::{era1, era2},
+        eras::{era1, era2, era3},
         property::*,
     },
-    stm::{abort, StmResult, TVar},
+    stm::{abort, atomically, StmResult, TVar},
 };
 
 use super::StoreError;
@@ -39,8 +39,8 @@ pub trait BlockStore<E: Era> {
 struct Hashed<T: HasHash<'static>>(T::Hash, T);
 
 impl<T: HasHash<'static>> Hashed<T> {
-    fn new(value: T) -> Hashed<T> {
-        Hashed(value.hash(), value)
+    fn new(value: T) -> Self {
+        Self(value.hash(), value)
     }
 }
 
@@ -76,7 +76,7 @@ impl BlockStore1 {
             hash_to_height.insert(h.0.clone(), idx);
         }
 
-        BlockStore1 {
+        Self {
             headers: TVar::new(headers),
             hash_to_height: TVar::new(hash_to_height),
         }
@@ -172,14 +172,14 @@ impl BlockStore<era1::Era1> for BlockStore1 {
     }
 }
 
-/// Generic block store for era ranking and input blocks.
-struct EraBlockStore<E: Era> {
+/// Generic block store for ranking and input blocks.
+struct BlockStoreRnI<E: Era> {
     rankings: TVar<im::Vector<Hashed<EraRankingBlock<E>>>>,
     inputs: TVar<im::HashMap<EraInputBlockHash<E>, EraInputBlockHeader<E>>>,
     hash_to_height: TVar<im::HashMap<EraRankingBlockHash<E>, usize>>,
 }
 
-impl<E: Era + 'static> EraBlockStore<E> {
+impl<E: Era + 'static> BlockStoreRnI<E> {
     fn new(rankings: Vec<EraRankingBlock<E>>, inputs: Vec<EraInputBlockHeader<E>>) -> Self {
         let mut iheaders = im::HashMap::new();
         for h in inputs {
@@ -206,7 +206,7 @@ impl<E: Era + 'static> EraBlockStore<E> {
             }
         }
 
-        EraBlockStore {
+        BlockStoreRnI {
             rankings: TVar::new(rheaders),
             inputs: TVar::new(iheaders),
             hash_to_height: TVar::new(hash_to_height),
@@ -214,7 +214,7 @@ impl<E: Era + 'static> EraBlockStore<E> {
     }
 }
 
-impl<E: Era + 'static> BlockStore<E> for EraBlockStore<E> {
+impl<E: Era + 'static> BlockStore<E> for BlockStoreRnI<E> {
     fn max_height(&self) -> StmResult<Height> {
         let v = self.rankings.read()?;
         Ok(v.last().map_or(0, |h| h.1.height()))
@@ -291,15 +291,15 @@ impl<E: Era + 'static> BlockStore<E> for EraBlockStore<E> {
     }
 }
 
-// Block store for era 2.
-pub struct BlockStore2(EraBlockStore<era2::Era2>);
+/// Block store for era 2.
+pub struct BlockStore2(BlockStoreRnI<era2::Era2>);
 
 impl BlockStore2 {
     pub fn new(
         rankings: Vec<EraRankingBlock<era2::Era2>>,
         inputs: Vec<EraInputBlockHeader<era2::Era2>>,
     ) -> Self {
-        BlockStore2(EraBlockStore::new(rankings, inputs))
+        Self(BlockStoreRnI::new(rankings, inputs))
     }
 }
 
@@ -342,6 +342,78 @@ impl BlockStore<era2::Era2> for BlockStore2 {
         &self,
         h: &EraInputBlockHash<era2::Era2>,
     ) -> StmResult<Option<EraInputBlockHeader<era2::Era2>>> {
+        self.0.get_input_block_header_by_hash(h)
+    }
+}
+
+/// Block store for era 2.
+pub struct BlockStore3(BlockStoreRnI<era3::Era3>);
+
+impl BlockStore3 {
+    pub fn new(
+        rankings: Vec<EraRankingBlock<era3::Era3>>,
+        inputs: Vec<EraInputBlockHeader<era3::Era3>>,
+    ) -> Self {
+        let store = Self(BlockStoreRnI::new(rankings, inputs));
+
+        // Sanity check that all input blocks reference existing inputs.
+        let inputs = atomically(|| store.0.inputs.read());
+
+        for h in inputs.values() {
+            for i in &h.parent_hashes {
+                assert!(inputs.contains_key(&i))
+            }
+        }
+
+        store
+    }
+}
+
+impl BlockStore<era3::Era3> for BlockStore3 {
+    fn max_height(&self) -> StmResult<Height> {
+        self.0.max_height()
+    }
+
+    fn add_ranking_block(&self, b: EraRankingBlock<era3::Era3>) -> StmResult<()> {
+        self.0.add_ranking_block(b)
+    }
+
+    fn get_ranking_block_by_height(
+        &self,
+        h: Height,
+    ) -> StmResult<Option<EraRankingBlock<era3::Era3>>> {
+        self.0.get_ranking_block_by_height(h)
+    }
+
+    fn get_ranking_block_by_hash(
+        &self,
+        h: &EraRankingBlockHash<era3::Era3>,
+    ) -> StmResult<Option<EraRankingBlock<era3::Era3>>> {
+        self.0.get_ranking_block_by_hash(h)
+    }
+
+    fn remove_ranking_blocks_above_height(&self, h: Height) -> StmResult<()> {
+        self.0.remove_ranking_blocks_above_height(h)
+    }
+
+    fn add_input_block_header(&self, h: EraInputBlockHeader<era3::Era3>) -> StmResult<()> {
+        // Sanity check that all referenced input blocks have already been added.
+        for i in &h.parent_hashes {
+            if !self.has_input_block_header(&i)? {
+                return abort(StoreError::MissingInputs);
+            }
+        }
+        self.0.add_input_block_header(h)
+    }
+
+    fn has_input_block_header(&self, h: &EraInputBlockHash<era3::Era3>) -> StmResult<bool> {
+        self.0.has_input_block_header(h)
+    }
+
+    fn get_input_block_header_by_hash(
+        &self,
+        h: &EraInputBlockHash<era3::Era3>,
+    ) -> StmResult<Option<EraInputBlockHeader<era3::Era3>>> {
         self.0.get_input_block_header_by_hash(h)
     }
 }

@@ -52,10 +52,10 @@ impl<'a> property::Ledger<'a> for Ledger {
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Eq, Hash)]
 pub struct InputBlockHash(CryptoHash);
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Eq, Hash)]
 pub struct RankingBlockHash(CryptoHash);
 
 impl From<RankingBlockHash> for CryptoHash {
@@ -144,7 +144,7 @@ pub struct InputBlock {
     pub transactions: Vec<Transaction>,
 }
 
-impl property::HasHeader for InputBlock {
+impl<'a> property::HasHeader<'a> for InputBlock {
     type Header = InputBlockHeader;
 
     fn header(&self) -> Self::Header {

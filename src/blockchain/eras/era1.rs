@@ -41,7 +41,7 @@ impl<'a> property::Ledger<'a> for Ledger {
     }
 }
 
-#[derive(PartialEq, Clone, Debug)]
+#[derive(PartialEq, Clone, Debug, Eq, Hash)]
 pub struct TransactionHash(CryptoHash);
 
 impl From<TransactionHash> for CryptoHash {
@@ -130,7 +130,7 @@ pub struct Block {
     pub transactions: Vec<Transaction>,
 }
 
-impl property::HasHeader for Block {
+impl<'a> property::HasHeader<'a> for Block {
     type Header = BlockHeader;
 
     fn header(&self) -> Self::Header {

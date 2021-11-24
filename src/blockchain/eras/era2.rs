@@ -106,7 +106,7 @@ impl<'a> property::HasTransactions<'a> for InputBlock {
     }
 }
 
-impl property::HasHeader for InputBlock {
+impl<'a> property::HasHeader<'a> for InputBlock {
     type Header = InputBlockHeader;
 
     fn header(&self) -> Self::Header {

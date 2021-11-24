@@ -19,7 +19,7 @@ pub mod era1;
 pub mod era2;
 pub mod era3;
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Eq, Hash)]
 pub enum Eras<E1, E2, E3> {
     Era1(E1),
     Era2(E2),
@@ -64,9 +64,9 @@ type CoInputBlockHash<'a> = Eras<
 >;
 
 type CoInputBlockHeader<'a> = Eras<
-    <<Era1 as Era>::InputBlock<'a> as HasHeader>::Header,
-    <<Era2 as Era>::InputBlock<'a> as HasHeader>::Header,
-    <<Era3 as Era>::InputBlock<'a> as HasHeader>::Header,
+    <<Era1 as Era>::InputBlock<'a> as HasHeader<'a>>::Header,
+    <<Era2 as Era>::InputBlock<'a> as HasHeader<'a>>::Header,
+    <<Era3 as Era>::InputBlock<'a> as HasHeader<'a>>::Header,
 >;
 
 type CoLedger<'a> =
@@ -98,8 +98,8 @@ impl<'a> HasHash<'a> for CoInputBlockHeader<'a> {
     }
 }
 
-impl HasHeader for CoInputBlock<'_> {
-    type Header = CoInputBlockHeader<'static>;
+impl<'a> HasHeader<'a> for CoInputBlock<'_> {
+    type Header = CoInputBlockHeader<'a>;
 
     fn header(&self) -> Self::Header {
         self.map(|b| b.header(), |b| b.header(), |b| b.header())

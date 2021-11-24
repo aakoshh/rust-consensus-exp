@@ -172,15 +172,15 @@ impl BlockStore<era1::Era1> for BlockStore1 {
     }
 }
 
-/// Block store for era 2.
-pub struct BlockStore2 {
-    rankings: TVar<im::Vector<Hashed<era2::RankingBlock>>>,
-    inputs: TVar<im::HashMap<era2::InputBlockHash, era2::InputBlockHeader>>,
-    hash_to_height: TVar<im::HashMap<era2::RankingBlockHash, usize>>,
+/// Generic block store for era ranking and input blocks.
+struct EraBlockStore<E: Era> {
+    rankings: TVar<im::Vector<Hashed<EraRankingBlock<E>>>>,
+    inputs: TVar<im::HashMap<EraInputBlockHash<E>, EraInputBlockHeader<E>>>,
+    hash_to_height: TVar<im::HashMap<EraRankingBlockHash<E>, usize>>,
 }
 
-impl BlockStore2 {
-    pub fn new(rankings: Vec<era2::RankingBlock>, inputs: Vec<era2::InputBlockHeader>) -> Self {
+impl<E: Era + 'static> EraBlockStore<E> {
+    fn new(rankings: Vec<EraRankingBlock<E>>, inputs: Vec<EraInputBlockHeader<E>>) -> Self {
         let mut iheaders = im::HashMap::new();
         for h in inputs {
             iheaders.insert(h.hash(), h);
@@ -206,7 +206,7 @@ impl BlockStore2 {
             }
         }
 
-        BlockStore2 {
+        EraBlockStore {
             rankings: TVar::new(rheaders),
             inputs: TVar::new(iheaders),
             hash_to_height: TVar::new(hash_to_height),
@@ -214,13 +214,13 @@ impl BlockStore2 {
     }
 }
 
-impl BlockStore<era2::Era2> for BlockStore2 {
+impl<E: Era + 'static> BlockStore<E> for EraBlockStore<E> {
     fn max_height(&self) -> StmResult<Height> {
         let v = self.rankings.read()?;
         Ok(v.last().map_or(0, |h| h.1.height()))
     }
 
-    fn add_ranking_block(&self, b: EraRankingBlock<era2::Era2>) -> StmResult<()> {
+    fn add_ranking_block(&self, b: EraRankingBlock<E>) -> StmResult<()> {
         let is = self.inputs.read()?;
         for h in b.input_block_hashes() {
             if !is.contains_key(&h) {
@@ -248,10 +248,7 @@ impl BlockStore<era2::Era2> for BlockStore2 {
         self.rankings.write(rs)
     }
 
-    fn get_ranking_block_by_height(
-        &self,
-        h: Height,
-    ) -> StmResult<Option<EraRankingBlock<era2::Era2>>> {
+    fn get_ranking_block_by_height(&self, h: Height) -> StmResult<Option<EraRankingBlock<E>>> {
         let v = self.rankings.read()?;
         let b = v.head().and_then(|b| {
             let min_height = b.1.height();
@@ -262,8 +259,8 @@ impl BlockStore<era2::Era2> for BlockStore2 {
 
     fn get_ranking_block_by_hash(
         &self,
-        h: &EraRankingBlockHash<era2::Era2>,
-    ) -> StmResult<Option<EraRankingBlock<era2::Era2>>> {
+        h: &EraRankingBlockHash<E>,
+    ) -> StmResult<Option<EraRankingBlock<E>>> {
         self.hash_to_height
             .read()?
             .get(h)
@@ -274,7 +271,7 @@ impl BlockStore<era2::Era2> for BlockStore2 {
         todo!()
     }
 
-    fn add_input_block_header(&self, h: EraInputBlockHeader<era2::Era2>) -> StmResult<()> {
+    fn add_input_block_header(&self, h: EraInputBlockHeader<E>) -> StmResult<()> {
         self.inputs.update(|m| {
             let mut c = m.clone();
             c.insert(h.hash(), h);
@@ -282,14 +279,69 @@ impl BlockStore<era2::Era2> for BlockStore2 {
         })
     }
 
-    fn has_input_block_header(&self, h: &EraInputBlockHash<era2::Era2>) -> StmResult<bool> {
+    fn has_input_block_header(&self, h: &EraInputBlockHash<E>) -> StmResult<bool> {
         self.inputs.read().map(|m| m.contains_key(h))
+    }
+
+    fn get_input_block_header_by_hash(
+        &self,
+        h: &EraInputBlockHash<E>,
+    ) -> StmResult<Option<EraInputBlockHeader<E>>> {
+        self.inputs.read().map(|m| m.get(h).map(|h| h.clone()))
+    }
+}
+
+// Block store for era 2.
+pub struct BlockStore2(EraBlockStore<era2::Era2>);
+
+impl BlockStore2 {
+    pub fn new(
+        rankings: Vec<EraRankingBlock<era2::Era2>>,
+        inputs: Vec<EraInputBlockHeader<era2::Era2>>,
+    ) -> Self {
+        BlockStore2(EraBlockStore::new(rankings, inputs))
+    }
+}
+
+impl BlockStore<era2::Era2> for BlockStore2 {
+    fn max_height(&self) -> StmResult<Height> {
+        self.0.max_height()
+    }
+
+    fn add_ranking_block(&self, b: EraRankingBlock<era2::Era2>) -> StmResult<()> {
+        self.0.add_ranking_block(b)
+    }
+
+    fn get_ranking_block_by_height(
+        &self,
+        h: Height,
+    ) -> StmResult<Option<EraRankingBlock<era2::Era2>>> {
+        self.0.get_ranking_block_by_height(h)
+    }
+
+    fn get_ranking_block_by_hash(
+        &self,
+        h: &EraRankingBlockHash<era2::Era2>,
+    ) -> StmResult<Option<EraRankingBlock<era2::Era2>>> {
+        self.0.get_ranking_block_by_hash(h)
+    }
+
+    fn remove_ranking_blocks_above_height(&self, h: Height) -> StmResult<()> {
+        self.0.remove_ranking_blocks_above_height(h)
+    }
+
+    fn add_input_block_header(&self, h: EraInputBlockHeader<era2::Era2>) -> StmResult<()> {
+        self.0.add_input_block_header(h)
+    }
+
+    fn has_input_block_header(&self, h: &EraInputBlockHash<era2::Era2>) -> StmResult<bool> {
+        self.0.has_input_block_header(h)
     }
 
     fn get_input_block_header_by_hash(
         &self,
         h: &EraInputBlockHash<era2::Era2>,
     ) -> StmResult<Option<EraInputBlockHeader<era2::Era2>>> {
-        self.inputs.read().map(|m| m.get(h).map(|h| h.clone()))
+        self.0.get_input_block_header_by_hash(h)
     }
 }

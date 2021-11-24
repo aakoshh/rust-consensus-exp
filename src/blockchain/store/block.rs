@@ -1,9 +1,12 @@
+use std::cmp::max;
+
 use crate::{
     blockchain::{
         eras::{
             era1::{self, Era1},
             era2::Era2,
             era3::Era3,
+            CoEra, Eras,
         },
         property::*,
     },
@@ -144,12 +147,14 @@ impl BlockStore<Era1> for BlockStore1 {
     fn remove_ranking_blocks_above_height(&self, h: Height) -> StmResult<()> {
         let headers = self.headers.read()?;
 
-        if headers.len() as Height <= h + 1 {
+        // Index of the first element to remove.
+        let idx = (h + 1) as usize;
+        if headers.len() <= idx {
             return Ok(());
         }
 
         let mut headers = headers.as_ref().clone();
-        let removed = headers.split_off((h + 1) as usize);
+        let removed = headers.split_off(idx);
         self.headers.write(headers)?;
 
         self.hash_to_height.update(|m| {
@@ -261,8 +266,8 @@ impl<E: Era + 'static> BlockStore<E> for BlockStoreRnI<E> {
     fn get_ranking_block_by_height(&self, h: Height) -> StmResult<Option<EraRankingBlock<E>>> {
         let v = self.rankings.read()?;
         let b = v.head().and_then(|b| {
-            let min_height = b.1.height();
-            v.get((h - min_height) as usize).map(|h| h.1.clone())
+            let idx = (h - b.1.height()) as usize;
+            v.get(idx).map(|h| h.1.clone())
         });
         Ok(b)
     }
@@ -278,7 +283,29 @@ impl<E: Era + 'static> BlockStore<E> for BlockStoreRnI<E> {
     }
 
     fn remove_ranking_blocks_above_height(&self, h: Height) -> StmResult<()> {
-        todo!()
+        let v = self.rankings.read()?;
+        if let Some(b) = v.head() {
+            // Index of the first item to remove.
+            // To remove the 0th item, the height has to be less than what it has.
+            let idx = max(0, (h + 1 - b.1.height()) as usize);
+            if v.len() <= idx {
+                return Ok(());
+            }
+
+            let mut v = v.as_ref().clone();
+            let removed = v.split_off(idx);
+            if !removed.is_empty() {
+                self.rankings.write(v)?;
+                self.hash_to_height.update(|m| {
+                    let mut c = m.clone();
+                    for b in removed {
+                        c.remove(&b.0);
+                    }
+                    c
+                })?;
+            }
+        }
+        Ok(())
     }
 
     fn add_input_block_header(&self, h: EraInputBlockHeader<E>) -> StmResult<()> {
@@ -432,25 +459,21 @@ impl BlockStore<Era3> for BlockStore3 {
 
 /// Block store imlementation for the coproduct of eras.
 pub struct CoBlockStore {
-    block_store_1: BlockStore1,
-    block_store_2: BlockStore2,
-    block_store_3: BlockStore3,
+    store1: BlockStore1,
+    store2: BlockStore2,
+    store3: BlockStore3,
 }
 
 impl CoBlockStore {
-    pub fn new(
-        block_store_1: BlockStore1,
-        block_store_2: BlockStore2,
-        block_store_3: BlockStore3,
-    ) -> Self {
+    pub fn new(store1: BlockStore1, store2: BlockStore2, store3: BlockStore3) -> Self {
         // Sanity check that the stores form a single chain.
-        CoBlockStore::assert_continuation(&block_store_1, &block_store_2);
-        CoBlockStore::assert_continuation(&block_store_2, &block_store_3);
+        CoBlockStore::assert_continuation(&store1, &store2);
+        CoBlockStore::assert_continuation(&store2, &store3);
 
         Self {
-            block_store_1,
-            block_store_2,
-            block_store_3,
+            store1,
+            store2,
+            store3,
         }
     }
 
@@ -478,5 +501,119 @@ impl CoBlockStore {
             Ok(())
         })
         .unwrap()
+    }
+
+    fn latest<F1, F2, F3, T>(&self, f1: F1, f2: F2, f3: F3) -> StmResult<Option<T>>
+    where
+        F1: Fn(&BlockStore1) -> StmResult<Option<T>>,
+        F2: Fn(&BlockStore2) -> StmResult<Option<T>>,
+        F3: Fn(&BlockStore3) -> StmResult<Option<T>>,
+    {
+        if let Some(v) = f3(&self.store3)? {
+            Ok(Some(v))
+        } else if let Some(v) = f2(&self.store2)? {
+            Ok(Some(v))
+        } else if let Some(v) = f1(&self.store1)? {
+            Ok(Some(v))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+impl BlockStore<CoEra> for CoBlockStore {
+    fn first_ranking_block(&self) -> StmResult<Option<EraRankingBlock<CoEra>>> {
+        self.latest(
+            |s| s.first_ranking_block().map(|b| b.map(Eras::Era1)),
+            |s| s.first_ranking_block().map(|b| b.map(Eras::Era2)),
+            |s| s.first_ranking_block().map(|b| b.map(Eras::Era3)),
+        )
+    }
+
+    fn last_ranking_block(&self) -> StmResult<Option<EraRankingBlock<CoEra>>> {
+        self.latest(
+            |s| s.last_ranking_block().map(|b| b.map(Eras::Era1)),
+            |s| s.last_ranking_block().map(|b| b.map(Eras::Era2)),
+            |s| s.last_ranking_block().map(|b| b.map(Eras::Era3)),
+        )
+    }
+
+    fn add_ranking_block(&self, b: EraRankingBlock<CoEra>) -> StmResult<()> {
+        match b {
+            Eras::Era1(b) => self.store1.add_ranking_block(b),
+            Eras::Era2(b) => self.store2.add_ranking_block(b),
+            Eras::Era3(b) => self.store3.add_ranking_block(b),
+        }
+    }
+
+    fn get_ranking_block_by_height(&self, h: Height) -> StmResult<Option<EraRankingBlock<CoEra>>> {
+        self.latest(
+            |s| s.get_ranking_block_by_height(h).map(|b| b.map(Eras::Era1)),
+            |s| s.get_ranking_block_by_height(h).map(|b| b.map(Eras::Era2)),
+            |s| s.get_ranking_block_by_height(h).map(|b| b.map(Eras::Era3)),
+        )
+    }
+
+    fn get_ranking_block_by_hash(
+        &self,
+        h: &EraRankingBlockHash<CoEra>,
+    ) -> StmResult<Option<EraRankingBlock<CoEra>>> {
+        match h {
+            Eras::Era1(h) => self
+                .store1
+                .get_ranking_block_by_hash(h)
+                .map(|b| b.map(Eras::Era1)),
+            Eras::Era2(h) => self
+                .store2
+                .get_ranking_block_by_hash(h)
+                .map(|b| b.map(Eras::Era2)),
+            Eras::Era3(h) => self
+                .store3
+                .get_ranking_block_by_hash(h)
+                .map(|b| b.map(Eras::Era3)),
+        }
+    }
+
+    fn remove_ranking_blocks_above_height(&self, h: Height) -> StmResult<()> {
+        self.store1.remove_ranking_blocks_above_height(h)?;
+        self.store1.remove_ranking_blocks_above_height(h)?;
+        self.store1.remove_ranking_blocks_above_height(h)?;
+        Ok(())
+    }
+
+    fn add_input_block_header(&self, h: EraInputBlockHeader<CoEra>) -> StmResult<()> {
+        match h {
+            Eras::Era1(h) => self.store1.add_input_block_header(h),
+            Eras::Era2(h) => self.store2.add_input_block_header(h),
+            Eras::Era3(h) => self.store3.add_input_block_header(h),
+        }
+    }
+
+    fn has_input_block_header(&self, h: &EraInputBlockHash<CoEra>) -> StmResult<bool> {
+        match h {
+            Eras::Era1(h) => self.store1.has_input_block_header(h),
+            Eras::Era2(h) => self.store2.has_input_block_header(h),
+            Eras::Era3(h) => self.store3.has_input_block_header(h),
+        }
+    }
+
+    fn get_input_block_header_by_hash(
+        &self,
+        h: &EraInputBlockHash<CoEra>,
+    ) -> StmResult<Option<EraInputBlockHeader<CoEra>>> {
+        match h {
+            Eras::Era1(h) => self
+                .store1
+                .get_input_block_header_by_hash(h)
+                .map(|b| b.map(Eras::Era1)),
+            Eras::Era2(h) => self
+                .store2
+                .get_input_block_header_by_hash(h)
+                .map(|b| b.map(Eras::Era2)),
+            Eras::Era3(h) => self
+                .store3
+                .get_input_block_header_by_hash(h)
+                .map(|b| b.map(Eras::Era3)),
+        }
     }
 }

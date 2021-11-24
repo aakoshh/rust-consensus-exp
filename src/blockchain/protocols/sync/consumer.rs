@@ -44,8 +44,6 @@ impl<E: Era, S: BlockStore<E>> Consumer<E, S> {
     }
 
     fn intersect(&self, c: CChan1<E, protocol::Intersect<E>>) -> SessionResult<CChan0<E>> {
-        //let mut c = c;
-
         todo!()
     }
 

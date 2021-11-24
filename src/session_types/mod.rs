@@ -364,8 +364,8 @@ impl<P, E> Chan<Var<Z>, (P, E)> {
     /// Recurse to the environment on the top of the environment stack.
     /// The agency must be kept, since there's no message exchange here,
     /// we just start from the top as a continuation of where we are.
-    pub fn zero(self) -> Chan<P, (P, E)> {
-        self.cast()
+    pub fn zero(self) -> SessionResult<Chan<P, (P, E)>> {
+        Ok(self.cast())
     }
 }
 

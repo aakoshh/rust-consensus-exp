@@ -2,13 +2,13 @@ use std::{sync::Arc, time::Duration};
 
 use crate::{
     blockchain::{
-        property::{Era, EraRankingBlock},
-        protocols::sync::messages::{self, FindIntersect},
+        property::*,
+        protocols::sync::messages::{self, AwaitReply, FindIntersect, RollBackward, RollForward},
         store::{BlockStore, ChainStore},
     },
     offer,
     session_types::{Chan, Rec, SessionResult},
-    stm::{atomically, TVar},
+    stm::{atomically, retry, TVar},
 };
 
 use super::{
@@ -112,12 +112,52 @@ impl<E: Era + 'static, S: BlockStore<E>> Producer<E, S> {
             None => c.sel2().send(IntersectNotFound)?,
         };
 
-        Ok(c.zero())
+        c.zero()
     }
 
+    /// Check the read pointer. If we have to roll back, let the consumer know where to.
+    /// If we have the next block available, update the read pointer and tell the client to roll forward.
+    /// Otherwise retry until we have new blocks available.
     fn next(&self, c: SChan1<E, protocol::Next<E>>) -> SessionResult<SChan0<E>> {
         let (c, messages::RequestNext) = c.recv(Duration::ZERO)?;
-        todo!()
+        match self.get_next(false) {
+            Some((b, false)) => c.sel1().sel1().send(RollForward(b))?.zero(),
+            Some((b, true)) => c.sel1().sel2().send(RollBackward(b.hash()))?.zero(),
+            None => {
+                let c = c.sel2().send(AwaitReply)?;
+                match self.get_next(true) {
+                    Some((b, false)) => c.sel1().send(RollForward(b))?.zero(),
+                    Some((b, true)) => c.sel2().send(RollBackward(b.hash()))?.zero(),
+                    None => unreachable!(),
+                }
+            }
+        }
+    }
+
+    /// Fetch the next thing to feed to the consumer.
+    fn get_next(&self, wait_for_change: bool) -> Option<(EraRankingBlock<E>, bool)> {
+        atomically(|| {
+            let last_ranking = self.read_pointer.last_ranking_block.read()?;
+            let needs_rollback = self.read_pointer.needs_rollback.read()?;
+
+            if *needs_rollback {
+                self.read_pointer.needs_rollback.write(false)?;
+                return Ok(Some((last_ranking.as_ref().clone(), true)));
+            }
+
+            let next_ranking = self
+                .chain_state
+                .get_ranking_block_by_height(last_ranking.height() + 1)?;
+
+            match next_ranking {
+                None if wait_for_change => retry(),
+                None => Ok(None),
+                Some(b) => {
+                    self.read_pointer.last_ranking_block.write(b.clone())?;
+                    Ok(Some((b, false)))
+                }
+            }
+        })
     }
 
     fn missing(&self, c: SChan1<E, protocol::Missing<E>>) -> SessionResult<SChan0<E>> {

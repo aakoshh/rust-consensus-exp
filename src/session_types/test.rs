@@ -1,4 +1,3 @@
-
 use super::*;
 use std::{thread, time::Instant};
 
@@ -100,13 +99,13 @@ fn greetings() {
                 Time => {
                     let (c, TimeRequest) = c.recv(t)?;
                     let c = c.send(TimeResponse(Instant::now()))?;
-                    c.zero()
+                    c.zero()?
                 },
                 Add => {
                     let (c, AddRequest(a)) = c.recv(t)?;
                     let (c, AddRequest(b)) = c.recv(t)?;
                     let c = c.send(AddResponse(a + b))?;
-                    c.zero()
+                    c.zero()?
                 },
                 Quit => {
                     let (c, Quit) = c.recv(t)?;
@@ -131,7 +130,7 @@ fn greetings() {
             .send(AddRequest(2))?
             .recv(t)?;
 
-        c.zero().sel2().sel2().send(Quit)?.close()?;
+        c.zero()?.sel2().sel2().send(Quit)?.close()?;
 
         ok(r)
     };

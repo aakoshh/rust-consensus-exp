@@ -3,15 +3,18 @@ use std::{sync::Arc, time::Duration};
 use crate::{
     blockchain::{
         property::{Era, EraRankingBlock},
-        protocols::sync::messages,
+        protocols::sync::messages::{self, FindIntersect},
         store::{BlockStore, ChainStore},
     },
     offer,
     session_types::{Chan, Rec, SessionResult},
-    stm::TVar,
+    stm::{atomically, TVar},
 };
 
-use super::protocol;
+use super::{
+    messages::{IntersectFound, IntersectNotFound},
+    protocol,
+};
 
 /// Server top-channel, after calling `.enter()` or `.zero()`.
 type SChan0<E: Era> = SChan1<E, protocol::Server<E>>;
@@ -91,9 +94,25 @@ impl<E: Era + 'static, S: BlockStore<E>> Producer<E, S> {
         }
     }
 
+    /// Find the first known hash in the request.
     fn intersect(&self, c: SChan1<E, protocol::Intersect<E>>) -> SessionResult<SChan0<E>> {
-        let (c, messages::FindIntersect(hashes)) = c.recv(Duration::ZERO)?;
-        todo!()
+        let (c, FindIntersect(hashes)) = c.recv(Duration::ZERO)?;
+
+        let first_known = atomically(|| {
+            for h in &hashes {
+                if self.chain_state.has_ranking_block(h)? {
+                    return Ok(Some(h.clone()));
+                }
+            }
+            Ok(None)
+        });
+
+        let c = match first_known {
+            Some(h) => c.sel1().send(IntersectFound(h))?,
+            None => c.sel2().send(IntersectNotFound)?,
+        };
+
+        Ok(c.zero())
     }
 
     fn next(&self, c: SChan1<E, protocol::Next<E>>) -> SessionResult<SChan0<E>> {

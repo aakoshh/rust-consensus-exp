@@ -258,6 +258,11 @@ impl<P, E> Chan<P, E> {
         close_chan(self);
         Err(SessionError::Abort(Box::new(e)))
     }
+
+    pub fn abort_dyn<T>(self, e: Box<dyn Error + marker::Send>) -> SessionResult<T> {
+        close_chan(self);
+        Err(SessionError::Abort(e))
+    }
 }
 
 impl<P, E, T: marker::Send + 'static> Chan<Send<T, P>, E> {

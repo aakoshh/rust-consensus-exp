@@ -4,15 +4,15 @@ use crate::{
     blockchain::{
         property::*,
         protocols::sync::messages::{self, AwaitReply, FindIntersect, RollBackward, RollForward},
-        store::{BlockStore, ChainStore},
+        store::{BlockStore, ChainStore, StoreError},
     },
     offer,
     session_types::{Chan, Rec, SessionResult},
-    stm::{atomically, retry, TVar},
+    stm::{abort, atomically, atomically_or_err, retry, TVar},
 };
 
 use super::{
-    messages::{IntersectFound, IntersectNotFound},
+    messages::{IntersectFound, IntersectNotFound, ReplyInputs},
     protocol,
 };
 
@@ -160,9 +160,28 @@ impl<E: Era + 'static, S: BlockStore<E>> Producer<E, S> {
         })
     }
 
+    /// Get all the requested hashes from the store.
     fn missing(&self, c: SChan1<E, protocol::Missing<E>>) -> SessionResult<SChan0<E>> {
         let (c, messages::RequestInputs(hashes)) = c.recv(Duration::ZERO)?;
-        todo!()
+        let result = atomically_or_err(|| {
+            let mut hs = Vec::new();
+            for h in &hashes {
+                if let Some(header) = self.chain_state.get_input_block_header_by_hash(h)? {
+                    hs.push(header);
+                } else {
+                    // Asking for a non-existing one would be a violation of the protocol.
+                    // TODO: We can also check that we're not being asked for stuff the client should know,
+                    // which is anything in the past cone of the read pointer.
+                    return abort(StoreError::MissingInputs);
+                }
+            }
+            Ok(hs)
+        });
+
+        match result {
+            Ok(headers) => c.send(ReplyInputs(headers))?.zero(),
+            Err(e) => c.abort_dyn(e),
+        }
     }
 
     fn quit(&self, c: SChan1<E, protocol::Quit>) -> SessionResult<()> {

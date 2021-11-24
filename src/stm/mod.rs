@@ -23,7 +23,7 @@ pub enum StmError {
     /// read have changed, before being retried.
     Retry,
     /// Abort the tranasction and return an error.
-    Abort(Box<dyn Error>),
+    Abort(Box<dyn Error + Send + Sync>),
 }
 
 pub type StmResult<T> = Result<T, StmError>;
@@ -190,7 +190,7 @@ pub fn guard(cond: bool) -> StmResult<()> {
     }
 }
 
-pub fn abort<T, E: Error + 'static>(e: E) -> StmResult<T> {
+pub fn abort<T, E: Error + Send + Sync + 'static>(e: E) -> StmResult<T> {
     Err(StmError::Abort(Box::new(e)))
 }
 
@@ -252,7 +252,7 @@ where
 /// can be committed without running into version conflicts, or until it returns
 /// an `Abort` in which case the contained error is returned.
 /// Make sure `f` is free of any side effects.
-pub fn atomically_or_err<F, T>(f: F) -> Result<T, Box<dyn Error>>
+pub fn atomically_or_err<F, T>(f: F) -> Result<T, Box<dyn Error + Send + Sync>>
 where
     F: Fn() -> StmResult<T>,
 {

@@ -7,10 +7,10 @@ use crate::blockchain::{
 
 use super::{era1, Crossing};
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Hash, Eq)]
 pub struct InputBlockHash(CryptoHash);
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Hash, Eq)]
 pub struct RankingBlockHash(CryptoHash);
 
 impl From<RankingBlockHash> for CryptoHash {

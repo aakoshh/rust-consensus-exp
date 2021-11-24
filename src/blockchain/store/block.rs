@@ -30,6 +30,7 @@ pub trait BlockStore<E: Era> {
         &self,
         h: &EraRankingBlockHash<E>,
     ) -> StmResult<Option<EraRankingBlock<E>>>;
+    fn has_ranking_block(&self, h: &EraRankingBlockHash<E>) -> StmResult<bool>;
 
     /// Roll back all ranking blocks from the top, all the way back to a certain height.
     fn remove_ranking_blocks_above_height(&self, h: Height) -> StmResult<()>;
@@ -142,6 +143,10 @@ impl BlockStore<Era1> for BlockStore1 {
             None => Ok(None),
             Some(h) => self.get_ranking_block_by_height(*h as Height),
         }
+    }
+
+    fn has_ranking_block(&self, h: &EraRankingBlockHash<Era1>) -> StmResult<bool> {
+        self.hash_to_height.read().map(|m| m.contains_key(h))
     }
 
     fn remove_ranking_blocks_above_height(&self, h: Height) -> StmResult<()> {
@@ -282,6 +287,10 @@ impl<E: Era + 'static> BlockStore<E> for BlockStoreRnI<E> {
             .map_or(Ok(None), |h| self.get_ranking_block_by_height(*h as Height))
     }
 
+    fn has_ranking_block(&self, h: &EraRankingBlockHash<E>) -> StmResult<bool> {
+        self.hash_to_height.read().map(|m| m.contains_key(h))
+    }
+
     fn remove_ranking_blocks_above_height(&self, h: Height) -> StmResult<()> {
         let v = self.rankings.read()?;
         if let Some(b) = v.head() {
@@ -364,6 +373,10 @@ impl BlockStore<Era2> for BlockStore2 {
         self.0.get_ranking_block_by_hash(h)
     }
 
+    fn has_ranking_block(&self, h: &EraRankingBlockHash<Era2>) -> StmResult<bool> {
+        self.0.has_ranking_block(h)
+    }
+
     fn remove_ranking_blocks_above_height(&self, h: Height) -> StmResult<()> {
         self.0.remove_ranking_blocks_above_height(h)
     }
@@ -429,6 +442,10 @@ impl BlockStore<Era3> for BlockStore3 {
         h: &EraRankingBlockHash<Era3>,
     ) -> StmResult<Option<EraRankingBlock<Era3>>> {
         self.0.get_ranking_block_by_hash(h)
+    }
+
+    fn has_ranking_block(&self, h: &EraRankingBlockHash<Era3>) -> StmResult<bool> {
+        self.0.has_ranking_block(h)
     }
 
     fn remove_ranking_blocks_above_height(&self, h: Height) -> StmResult<()> {
@@ -574,10 +591,18 @@ impl BlockStore<CoEra> for CoBlockStore {
         }
     }
 
+    fn has_ranking_block(&self, h: &EraRankingBlockHash<CoEra>) -> StmResult<bool> {
+        match h {
+            Eras::Era1(h) => self.store1.has_ranking_block(h),
+            Eras::Era2(h) => self.store2.has_ranking_block(h),
+            Eras::Era3(h) => self.store3.has_ranking_block(h),
+        }
+    }
+
     fn remove_ranking_blocks_above_height(&self, h: Height) -> StmResult<()> {
         self.store1.remove_ranking_blocks_above_height(h)?;
-        self.store1.remove_ranking_blocks_above_height(h)?;
-        self.store1.remove_ranking_blocks_above_height(h)?;
+        self.store2.remove_ranking_blocks_above_height(h)?;
+        self.store3.remove_ranking_blocks_above_height(h)?;
         Ok(())
     }
 

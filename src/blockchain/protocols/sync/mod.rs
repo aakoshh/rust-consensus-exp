@@ -6,6 +6,8 @@ mod messages {
     use crate::blockchain::property::*;
 
     /// Ask the producer to find the newest point that exists on its blockchain.
+    /// The block hashes are assumed to go from latest to oldest, for example
+    /// with exponential gaps between them, e.g. tip, tip-1, tip-2, tip-4, tip-8, etc.
     pub struct FindIntersect<E: Era>(pub Vec<EraRankingBlockHash<E>>);
 
     /// Tell the consumer about the first point that can be found on the producer's chain.

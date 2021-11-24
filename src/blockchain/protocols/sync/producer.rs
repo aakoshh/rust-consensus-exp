@@ -19,6 +19,34 @@ type SChan0<E: Era> = SChan1<E, protocol::Server<E>>;
 /// Server sub-protocol channel.
 type SChan1<E: Era, P> = Chan<P, (protocol::Server<E>, ())>;
 
+/// The read pointer is shared between the producer and the chain selector thread.
+///
+/// If the chains selector thread decided to switch forks, it will go through all
+/// the read pointers of the connected consumers and update them accordingly,
+/// leaving an instruction to roll back if necessary. The Producer then sees the
+/// updated read pointer and issues the rollback to the Consumer.
+pub struct ReadPointer<E: Era> {
+    /// Remember the last header we have relayed to the consumer.
+    /// Give them the next block when they ask, unless we have to
+    /// roll back first.
+    last_ranking_block: TVar<EraRankingBlock<E>>,
+    /// Indicate that the next message needs to be a rollback
+    /// to the `last_header`, and then we go on from there.
+    needs_rollback: TVar<bool>,
+}
+
+impl<E: Era + 'static> ReadPointer<E> {
+    /// Initialise the read pointer to the genesis of the chain.
+    /// The consumer can use intersect to refine it.
+    pub fn new<S: BlockStore<E>>(chain_state: Arc<ChainStore<E, S>>) -> Self {
+        let genesis = chain_state.genesis().to_owned();
+        Self {
+            last_ranking_block: TVar::new(genesis),
+            needs_rollback: TVar::new(false),
+        }
+    }
+}
+
 /// Implementation of the Server protocol, a.k.a. the Producer.
 pub struct Producer<E: Era, S> {
     /// The state of the producer, which it feeds to the consumer.
@@ -29,18 +57,15 @@ pub struct Producer<E: Era, S> {
     /// respective consumers; but the chainge is initiated by
     /// the sync control thread that switches between forks.
     chain_state: Arc<ChainStore<E, S>>,
-    /// Remember the last header we have relayed to the consumer.
-    /// Give them the next block when they ask, unless we have to
-    /// roll back first.
-    read_pointer: TVar<EraRankingBlock<E>>,
+    /// Shared read pointer.
+    read_pointer: Arc<ReadPointer<E>>,
 }
 
 impl<E: Era + 'static, S: BlockStore<E>> Producer<E, S> {
-    pub fn new(chain_state: Arc<ChainStore<E, S>>) -> Producer<E, S> {
-        let genesis = chain_state.genesis().to_owned();
-        Producer {
+    pub fn new(chain_state: Arc<ChainStore<E, S>>, read_pointer: Arc<ReadPointer<E>>) -> Self {
+        Self {
             chain_state,
-            read_pointer: TVar::new(genesis),
+            read_pointer,
         }
     }
 

@@ -86,6 +86,10 @@ impl<E: Era + 'static, S: BlockStore<E>> BlockStore<E> for ChainStore<E, S> {
         self.block_store.get_ranking_block_by_hash(h)
     }
 
+    fn has_ranking_block(&self, h: &EraRankingBlockHash<E>) -> StmResult<bool> {
+        self.block_store.has_ranking_block(h)
+    }
+
     fn remove_ranking_blocks_above_height(&self, h: Height) -> StmResult<()> {
         self.block_store
             .get_ranking_block_by_height(h)?

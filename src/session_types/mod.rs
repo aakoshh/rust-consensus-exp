@@ -154,11 +154,18 @@ pub struct Rec<P>(PhantomData<P>);
 /// Recurse. N indicates how many layers of the recursive environment we recurse out of.
 pub struct Var<N>(PhantomData<N>);
 
-/// Indicate that a protocol will receive a message..
-pub trait Incoming {}
+/// Indicate that a protocol will receive a message, and specify what type it is,
+/// so we can decide in an offer which arm we got a message for.
+pub trait Incoming {
+    type Expected;
+}
 
-impl<T, P> Incoming for Recv<T, P> {}
-impl<P: Incoming, Q: Incoming> Incoming for Offer<P, Q> {}
+impl<T, P> Incoming for Recv<T, P> {
+    type Expected = T;
+}
+impl<P: Incoming, Q: Incoming> Incoming for Offer<P, Q> {
+    type Expected = P::Expected;
+}
 
 /// Indicate that a protocol will send a message.
 pub trait Outgoing {}
@@ -306,33 +313,10 @@ impl<P: Outgoing, Q: Outgoing, E> Chan<Choose<P, Q>, E> {
     }
 }
 
-impl<A: Outgoing, B: Outgoing, Z> Chan<Choose<A, B>, Z> {
-    pub fn skip0(self) -> Chan<A, Z> {
-        self.sel1()
-    }
-}
-
-impl<A: Outgoing, B: Outgoing, Z> Chan<Choose<A, B>, Z> {
-    pub fn skip1(self) -> Chan<B, Z> {
-        self.sel2()
-    }
-}
-
-impl<A: Outgoing, B: Outgoing, C: Outgoing, Z> Chan<Choose<A, Choose<B, C>>, Z> {
-    pub fn skip2(self) -> Chan<C, Z> {
-        self.sel2().sel2()
-    }
-}
-
-impl<A: Outgoing, B: Outgoing, C: Outgoing, D: Outgoing, Z>
-    Chan<Choose<A, Choose<B, Choose<C, D>>>, Z>
+impl<P: Incoming, Q: Incoming, E> Chan<Offer<P, Q>, E>
+where
+    P::Expected: 'static,
 {
-    pub fn skip3(self) -> Chan<D, Z> {
-        self.sel2().sel2().sel2()
-    }
-}
-
-impl<T: 'static, P, Q: Incoming, E> Chan<Offer<Recv<T, P>, Q>, E> {
     /// Put the value we pulled from the channel back,
     /// so the next protocol step can read it and use it.
     fn stash(mut self, msg: DynMessage) -> Self {
@@ -344,12 +328,12 @@ impl<T: 'static, P, Q: Incoming, E> Chan<Offer<Recv<T, P>, Q>, E> {
     /// of two options for continuing the protocol: either `P` or `Q`.
     /// Both options mean they will have to send a message to us,
     /// the agency is on their side.
-    pub fn offer(mut self, t: Duration) -> SessionResult<Branch<Chan<Recv<T, P>, E>, Chan<Q, E>>> {
+    pub fn offer(mut self, t: Duration) -> SessionResult<Branch<Chan<P, E>, Chan<Q, E>>> {
         // The next message we read from the channel decides
         // which protocol we go with.
         let msg = read_chan_dyn(&mut self, t)?;
 
-        if msg.downcast_ref::<T>().is_some() {
+        if msg.downcast_ref::<P::Expected>().is_some() {
             Ok(Left(self.stash(msg).cast()))
         } else {
             Ok(Right(self.stash(msg).cast()))

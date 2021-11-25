@@ -16,11 +16,10 @@ use super::{
     protocol,
 };
 
-/// Server top-channel, after calling `.enter()` or `.zero()`.
-type SChan0<E: Era> = SChan1<E, protocol::Server<E>>;
-
 /// Server sub-protocol channel.
 type SChan1<E: Era, P> = Chan<P, (protocol::Server<E>, ())>;
+/// Server top-channel, after calling `.enter()` or `.zero()`.
+type SChan0<E: Era> = SChan1<E, protocol::Server<E>>;
 
 /// The read pointer is shared between the producer and the chain selector thread.
 ///
@@ -74,7 +73,7 @@ impl<E: Era + 'static, S: BlockStore<E>> Producer<E, S> {
 
     /// Protocol implementation for the producer, feeding a consumer its longest chain.
     pub fn sync_chain(&self, c: Chan<Rec<protocol::Server<E>>, ()>) -> SessionResult<()> {
-        let mut c = c.enter();
+        let mut c: SChan0<E> = c.enter();
         let t = Duration::from_secs(60);
         loop {
             c = offer! { c, t,

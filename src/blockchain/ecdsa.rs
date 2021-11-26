@@ -10,11 +10,11 @@ impl PrivateKey {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Hash)]
 pub struct PublicKey(pub [u8; 64]);
 
-#[derive(Clone)]
-pub struct Signature<K, T>([u8; 65], PhantomData<K>, PhantomData<T>);
+#[derive(Clone, Hash)]
+pub struct Signature<K, T>(pub [u8; 65], PhantomData<K>, PhantomData<T>);
 
 impl<'a, K: Into<PublicKey>, T: HasHash> Signature<K, T> {
     pub fn new(sig: [u8; 65]) -> Signature<K, T> {

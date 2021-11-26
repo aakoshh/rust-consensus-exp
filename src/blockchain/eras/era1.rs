@@ -76,7 +76,7 @@ impl From<BlockHash> for CryptoHash {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Hash)]
 pub struct ValidatorId(pub PublicKey);
 
 impl From<ValidatorId> for PublicKey {
@@ -85,7 +85,7 @@ impl From<ValidatorId> for PublicKey {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Hash)]
 pub struct BlockHeader {
     pub parent_hash: BlockHash,
     pub epoch_id: EpochId,
@@ -100,7 +100,7 @@ impl property::HasHash for BlockHeader {
     type Hash = BlockHash;
 
     fn hash(&self) -> Self::Hash {
-        todo!()
+        BlockHash(CryptoHash::mock(&self))
     }
 }
 

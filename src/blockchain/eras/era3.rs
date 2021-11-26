@@ -10,7 +10,7 @@ use crate::blockchain::{ecdsa::Signature, CryptoHash};
 
 use super::{era2, Crossing};
 
-#[derive(Clone)]
+#[derive(Clone, Hash)]
 pub struct UsefulWorkHash(CryptoHash);
 
 #[derive(Clone)]
@@ -26,7 +26,7 @@ pub struct UsefulWorkStatus {
     remaining_reward: Amount,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Hash)]
 pub struct UsefulWorkSubmission {
     useful_work_hash: UsefulWorkHash,
     solution: Vec<u8>,
@@ -70,7 +70,7 @@ impl From<InputBlockHash> for CryptoHash {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Hash)]
 pub struct RankingBlock {
     pub parent_hash: Crossing<era2::RankingBlockHash, RankingBlockHash>,
     pub epoch_id: EpochId,
@@ -85,7 +85,7 @@ impl property::HasHash for RankingBlock {
     type Hash = RankingBlockHash;
 
     fn hash(&self) -> Self::Hash {
-        todo!()
+        RankingBlockHash(CryptoHash::mock(&self))
     }
 }
 
@@ -106,7 +106,7 @@ impl property::RankingBlock for RankingBlock {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Hash)]
 pub struct InputBlockHeader {
     pub parent_hashes: Vec<InputBlockHash>,
     pub content_hash: CryptoHash,
@@ -135,7 +135,7 @@ impl property::HasHash for InputBlockHeader {
     type Hash = InputBlockHash;
 
     fn hash(&self) -> Self::Hash {
-        todo!()
+        InputBlockHash(CryptoHash::mock(&self))
     }
 }
 

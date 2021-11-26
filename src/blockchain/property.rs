@@ -9,7 +9,7 @@ pub type Height = u64;
 /// An "either" type for things that can cross two eras,
 /// like the parent hash of a block, it may be pointing
 /// at a parent in the previous era.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Hash)]
 pub enum Crossing<P, C> {
     Prev(P),
     Curr(C),

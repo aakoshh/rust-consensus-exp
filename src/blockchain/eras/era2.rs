@@ -25,7 +25,7 @@ impl From<InputBlockHash> for CryptoHash {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Hash)]
 pub struct RankingBlock {
     pub parent_hash: Crossing<era1::BlockHash, RankingBlockHash>,
     pub epoch_id: EpochId,
@@ -40,7 +40,7 @@ impl property::HasHash for RankingBlock {
     type Hash = RankingBlockHash;
 
     fn hash(&self) -> Self::Hash {
-        todo!()
+        RankingBlockHash(CryptoHash::mock(&self))
     }
 }
 
@@ -60,10 +60,10 @@ impl property::RankingBlock for RankingBlock {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Hash)]
 pub struct MinerId(PublicKey);
 
-#[derive(Clone)]
+#[derive(Clone, Hash)]
 pub struct InputBlockHeader {
     pub content_hash: CryptoHash,
     pub nonce: [u8; 32],
@@ -86,7 +86,7 @@ impl property::HasHash for InputBlockHeader {
     type Hash = InputBlockHash;
 
     fn hash(&self) -> Self::Hash {
-        todo!()
+        InputBlockHash(CryptoHash::mock(&self))
     }
 }
 

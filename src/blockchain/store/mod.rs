@@ -12,6 +12,8 @@ pub enum StoreError {
     DoesNotExtendChain,
     /// The ranking block refers to input blocks we do not have.
     MissingInputs,
+    /// We cannot find a block that by protocol we should have.
+    RankingBlockDoesNotExist,
 }
 
 impl Display for StoreError {

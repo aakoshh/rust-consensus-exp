@@ -1,8 +1,8 @@
-use std::{sync::Arc, time::Duration};
+use std::{cmp::max, sync::Arc, time::Duration};
 
 use crate::{
     blockchain::{
-        property::{Era, EraRankingBlock, RankingBlock},
+        property::*,
         protocols::sync::messages::{AwaitReply, RequestNext, RollBackward, RollForward},
         store::{BlockStore, ChainStore, StoreError},
     },
@@ -54,10 +54,66 @@ impl<E: Era + 'static, S: BlockStore<E>> Consumer<E, S> {
     fn intersect(&self, c: CChan1<E, protocol::Intersect<E>>) -> SessionResult<CChan0<E>> {
         // Select blocks at exponentially larger gaps in our chain.
         // Ask the producer what the best intersect is.
-        // Repeat until we cannot improve the intersection.
+        // Repeat until we cannot improve the intersection by doing bisecting between the point
+        // that we found and the one before it that we didn't.
         // Drop anything from our chain that sits above the intersect.
         // Return the zeroed client.
-        todo!()
+        let anchor_hashes = atomically(|| {
+            let tip = self.chain_store.tip()?;
+            let mut hashes = vec![tip.hash()];
+            let mut delta = 1;
+            let mut height = tip.height();
+            // In this example just go back as far as genesis. In a real blockchain there would probably
+            // be a cap to how far we have to go, beyond which the chain would be considered stable.
+            while height > 0 {
+                height = max(0, height - delta);
+                delta = delta * 2;
+                if let Some(header) = self.chain_store.get_ranking_block_by_height(height)? {
+                    hashes.push(header.hash());
+                } else {
+                    break;
+                }
+            }
+            Ok(hashes)
+        });
+
+        let c = c.send(FindIntersect(anchor_hashes.clone()))?;
+
+        offer! { c, Duration::from_secs(60),
+            Found => {
+                let (c, IntersectFound(hash)) = c.recv(Duration::ZERO)?;
+
+                // Check that the producer is not sending rubbish.
+                if !anchor_hashes.contains(&hash) {
+                    return Err(SessionError::Abort(Box::new(StoreError::RankingBlockDoesNotExist)))
+                }
+
+                // TODO: Here we could do bisection to find the best possible intersect,
+                // but for this example I'll just use whatever we found in the first round.
+
+                let ok = atomically(|| {
+                    if let Some(block) = self.chain_store.get_ranking_block_by_hash(&hash)? {
+                        self.chain_store.remove_ranking_blocks_above_height(block.height())?;
+                        Ok(true)
+                    } else {
+                        // The block could have been removed if we switched to a different fork.
+                        Ok(false)
+                    }
+                });
+
+                if ok {
+                    c.zero()
+                } else {
+                    // Try syncing again.
+                    self.intersect(c.zero()?.sel1())
+                }
+            },
+            NotFound => {
+                let (_c, IntersectNotFound) = c.recv(Duration::ZERO)?;
+                // We went back to genesis and still could not connect!
+                Err(SessionError::Abort(Box::new(StoreError::DoesNotExtendChain)))
+            }
+        }
     }
 
     /// Ask the next update; wait if we have to. If we need to roll back, then drop

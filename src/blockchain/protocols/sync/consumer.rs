@@ -120,14 +120,37 @@ impl<E: Era + 'static, S: BlockStore<E>> Consumer<E, S> {
         }
     }
 
-    /// Recursively ask for all the missing dependencies along the parents.
-    /// In the end store the original ranking block and all the inputs along the way.
+    /// Ask for all the missing dependencies of a ranking block. Since it must refer to all the input blocks,
+    /// including all the transitively included ones, we don't have to do any recursion. After the missing
+    /// blocks arrive, we insert them and the ranking block as well into the store.
     fn missing(
         &self,
         c: CChan1<E, protocol::Missing<E>>,
         ranking: EraRankingBlock<E>,
     ) -> SessionResult<CChan0<E>> {
-        todo!()
+        let missing = atomically(|| {
+            let mut missing = Vec::new();
+            for h in ranking.input_block_hashes() {
+                if !self.chain_store.has_input_block_header(&h)? {
+                    missing.push(h);
+                }
+            }
+            Ok(missing)
+        });
+        let c = c.send(RequestInputs(missing))?;
+        let (c, ReplyInputs(headers)) = c.recv(Duration::from_secs(60))?;
+        let result = atomically_or_err(|| {
+            for h in headers.clone() {
+                self.chain_store.add_input_block_header(h)?;
+            }
+            self.chain_store.add_ranking_block(ranking.clone())
+        });
+        // If adding still fails then the peer didn't send us the right headers, or they were in a wrong order.
+        // In any case it would be a protocol violation, so we can abort the connection.
+        match result {
+            Ok(()) => c.zero(),
+            Err(e) => Err(SessionError::Abort(e)),
+        }
     }
 
     fn quit(&self, c: CChan1<E, protocol::Quit>) -> SessionResult<()> {

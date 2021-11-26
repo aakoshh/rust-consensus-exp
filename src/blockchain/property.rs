@@ -97,6 +97,14 @@ pub trait Era {
     type Transaction<'a>;
 
     /// Input block carry the transactions.
+    ///
+    /// Input blocks might have other input blocks as parents, however we can require that
+    /// ranking blocks explicitly include references to them, in an order that satisifies
+    /// their topological structure. Otherwise the DAG structure of input blocks could just
+    /// be a partial order; the ranking blocks define a cononic ordering because there is
+    /// a single vector of hashes. It also simplifies syncing: a ranking block must mention
+    /// all the input blocks that it wants to include, so we don't have to worry about
+    /// missing transitive dependencies.
     type InputBlock<'a>: HasHeader + HasTransactions<'a, Transaction = Self::Transaction<'a>>;
 
     /// The ranking blocks refer to input blocks by their hashes.

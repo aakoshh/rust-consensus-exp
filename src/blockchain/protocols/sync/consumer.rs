@@ -3,7 +3,10 @@ use std::{sync::Arc, time::Duration};
 use crate::{
     blockchain::{
         property::*,
-        protocols::sync::messages::{AwaitReply, RequestNext, RollBackward, RollForward},
+        protocols::{
+            sync::messages::{AwaitReply, RequestNext, RollBackward, RollForward},
+            Cancelable,
+        },
         store::{BlockStore, ChainStore, StoreError},
     },
     offer,
@@ -30,24 +33,33 @@ pub struct Consumer<E: Era, S> {
     /// see all state at once and can make overall decisions on which blocks
     /// to download.
     chain_store: Arc<ChainStore<E, S>>,
+
+    /// The cancel token can be used to tell the consumer to stop asking for new
+    /// updates. It won't exit mid protocol, only at safe points.
+    cancel_token: Arc<Cancelable>,
 }
 
 impl<E: Era + 'static, S: BlockStore<E>> Consumer<E, S> {
-    pub fn new(chain_store: Arc<ChainStore<E, S>>) -> Consumer<E, S> {
-        Consumer { chain_store }
+    pub fn new(chain_store: Arc<ChainStore<E, S>>, cancel_token: Arc<Cancelable>) -> Self {
+        Self {
+            chain_store,
+            cancel_token,
+        }
     }
 
     /// Protocol implementation for a consumer following a producer.
-    pub fn sync_chain(&self, c: Chan<Rec<protocol::Client<E>>, ()>) -> SessionResult<()> {
-        let mut c: CChan0<E> = c.enter();
+    pub fn sync_chain(self, chan: Chan<Rec<protocol::Client<E>>, ()>) -> SessionResult<()> {
+        let mut c: CChan0<E> = chan.enter();
 
         // First find where our chain intersects with that of the producer.
         c = self.intersect(c.sel1())?;
 
         // From now, just keep requesting new updates and ask for missing inputs.
-        loop {
+        while !self.cancel_token.is_canceled() {
             c = self.next(c.sel2().sel1())?;
         }
+
+        self.quit(c.sel2().sel2().sel2())
     }
 
     /// Find the last intersecting block we have with the producer and trim the chain store accordingly.

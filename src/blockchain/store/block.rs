@@ -1,5 +1,3 @@
-use std::cmp::max;
-
 use crate::{
     blockchain::{
         eras::{
@@ -193,7 +191,7 @@ impl BlockStore<Era1> for BlockStore1 {
 struct BlockStoreRnI<E: Era> {
     rankings: TVar<im::Vector<Hashed<EraRankingBlock<E>>>>,
     inputs: TVar<im::HashMap<EraInputBlockHash<E>, EraInputBlockHeader<E>>>,
-    hash_to_height: TVar<im::HashMap<EraRankingBlockHash<E>, usize>>,
+    hash_to_height: TVar<im::HashMap<EraRankingBlockHash<E>, Height>>,
 }
 
 impl<E: Era + 'static> BlockStoreRnI<E> {
@@ -207,8 +205,8 @@ impl<E: Era + 'static> BlockStoreRnI<E> {
         rheaders.extend(rankings.into_iter().map(Hashed::new));
 
         let mut hash_to_height = im::HashMap::new();
-        for (idx, h) in rheaders.iter().enumerate() {
-            hash_to_height.insert(h.0.clone(), idx);
+        for h in rheaders.iter() {
+            hash_to_height.insert(h.0.clone(), h.1.height());
         }
 
         // Sanity check that this is a chain.
@@ -259,7 +257,7 @@ impl<E: Era + 'static> BlockStore<E> for BlockStoreRnI<E> {
 
         self.hash_to_height.update(|m| {
             let mut c = m.clone();
-            c.insert(hashed.0.clone(), rs.len());
+            c.insert(hashed.0.clone(), hashed.1.height());
             c
         })?;
 
@@ -270,7 +268,7 @@ impl<E: Era + 'static> BlockStore<E> for BlockStoreRnI<E> {
 
     fn get_ranking_block_by_height(&self, h: Height) -> StmResult<Option<EraRankingBlock<E>>> {
         let v = self.rankings.read()?;
-        let b = v.head().and_then(|b| {
+        let b = v.head().filter(|b| h >= b.1.height()).and_then(|b| {
             let idx = (h - b.1.height()) as usize;
             v.get(idx).map(|h| h.1.clone())
         });
@@ -284,7 +282,7 @@ impl<E: Era + 'static> BlockStore<E> for BlockStoreRnI<E> {
         self.hash_to_height
             .read()?
             .get(h)
-            .map_or(Ok(None), |h| self.get_ranking_block_by_height(*h as Height))
+            .map_or(Ok(None), |h| self.get_ranking_block_by_height(*h))
     }
 
     fn has_ranking_block(&self, h: &EraRankingBlockHash<E>) -> StmResult<bool> {
@@ -293,10 +291,10 @@ impl<E: Era + 'static> BlockStore<E> for BlockStoreRnI<E> {
 
     fn remove_ranking_blocks_above_height(&self, h: Height) -> StmResult<()> {
         let v = self.rankings.read()?;
-        if let Some(b) = v.head() {
+        if let Some(b) = v.head().filter(|b| h >= b.1.height()) {
             // Index of the first item to remove.
             // To remove the 0th item, the height has to be less than what it has.
-            let idx = max(0, (h + 1 - b.1.height()) as usize);
+            let idx = (h + 1 - b.1.height()) as usize;
             if v.len() <= idx {
                 return Ok(());
             }

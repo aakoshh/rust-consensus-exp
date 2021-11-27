@@ -1,4 +1,4 @@
-use std::{cmp::max, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use crate::{
     blockchain::{
@@ -66,7 +66,7 @@ impl<E: Era + 'static, S: BlockStore<E>> Consumer<E, S> {
             // In this example just go back as far as genesis. In a real blockchain there would probably
             // be a cap to how far we have to go, beyond which the chain would be considered stable.
             while height > 0 {
-                height = max(0, height - delta);
+                height = if height < delta { 0 } else { height - delta };
                 delta = delta * 2;
                 if let Some(header) = self.chain_store.get_ranking_block_by_height(height)? {
                     hashes.push(header.hash());

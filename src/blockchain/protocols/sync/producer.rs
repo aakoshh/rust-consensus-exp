@@ -31,21 +31,21 @@ pub struct ReadPointer<E: Era> {
     /// Remember the last header we have relayed to the consumer.
     /// Give them the next block when they ask, unless we have to
     /// roll back first.
-    last_ranking_block: TVar<EraRankingBlock<E>>,
+    pub last_ranking_block: TVar<EraRankingBlock<E>>,
     /// Indicate that the next message needs to be a rollback
     /// to the `last_header`, and then we go on from there.
-    needs_rollback: TVar<bool>,
+    pub needs_rollback: TVar<bool>,
 }
 
 impl<E: Era + 'static> ReadPointer<E> {
     /// Initialise the read pointer to the genesis of the chain.
     /// The consumer can use intersect to refine it.
-    pub fn new<S: BlockStore<E>>(chain_state: Arc<ChainStore<E, S>>) -> Self {
+    pub fn new<S: BlockStore<E>>(chain_state: Arc<ChainStore<E, S>>) -> Arc<Self> {
         let genesis = chain_state.genesis().to_owned();
-        Self {
+        Arc::new(Self {
             last_ranking_block: TVar::new(genesis),
             needs_rollback: TVar::new(false),
-        }
+        })
     }
 }
 
@@ -64,11 +64,11 @@ pub struct Producer<E: Era, S> {
 }
 
 impl<E: Era + 'static, S: BlockStore<E>> Producer<E, S> {
-    pub fn new(chain_state: Arc<ChainStore<E, S>>, read_pointer: Arc<ReadPointer<E>>) -> Self {
-        Self {
+    pub fn new(chain_state: Arc<ChainStore<E, S>>, read_pointer: Arc<ReadPointer<E>>) -> Arc<Self> {
+        Arc::new(Self {
             chain_state,
             read_pointer,
-        }
+        })
     }
 
     /// Protocol implementation for the producer, feeding a consumer its longest chain.
@@ -99,7 +99,9 @@ impl<E: Era + 'static, S: BlockStore<E>> Producer<E, S> {
 
         let first_known = atomically(|| {
             for h in &hashes {
-                if self.chain_state.has_ranking_block(h)? {
+                if let Some(b) = self.chain_state.get_ranking_block_by_hash(h)? {
+                    self.read_pointer.last_ranking_block.write(b)?;
+                    self.read_pointer.needs_rollback.write(false)?;
                     return Ok(Some(h.clone()));
                 }
             }

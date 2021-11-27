@@ -17,7 +17,7 @@ pub struct ChainStore<E: Era, S> {
 }
 
 impl<E: Era + 'static, S: BlockStore<E>> ChainStore<E, S> {
-    pub fn new(block_store: S) -> ChainStore<E, S> {
+    pub fn new(block_store: S) -> Arc<Self> {
         // `ChainStore` represents a full chain, so it is expected to be called with a non-empty block store.
         let (genesis, tip) = atomically(|| {
             let g = block_store.first_ranking_block()?;
@@ -25,11 +25,11 @@ impl<E: Era + 'static, S: BlockStore<E>> ChainStore<E, S> {
             Ok((g.unwrap(), t.unwrap()))
         });
 
-        ChainStore {
+        Arc::new(Self {
             block_store,
             genesis,
             tip: TVar::new(tip),
-        }
+        })
     }
 
     pub fn tip(&self) -> StmResult<Arc<EraRankingBlock<E>>> {

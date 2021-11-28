@@ -7,10 +7,10 @@ use crate::blockchain::{
 
 use super::{era1, Crossing};
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug, Hash, Eq)]
 pub struct InputBlockHash(CryptoHash);
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug, Hash, Eq)]
 pub struct RankingBlockHash(CryptoHash);
 
 impl From<RankingBlockHash> for CryptoHash {
@@ -25,6 +25,7 @@ impl From<InputBlockHash> for CryptoHash {
     }
 }
 
+#[derive(Clone, Hash)]
 pub struct RankingBlock {
     pub parent_hash: Crossing<era1::BlockHash, RankingBlockHash>,
     pub epoch_id: EpochId,
@@ -35,15 +36,15 @@ pub struct RankingBlock {
     pub signature: Signature<ValidatorId, RankingBlock>,
 }
 
-impl<'a> property::HasHash<'a> for RankingBlock {
+impl property::HasHash for RankingBlock {
     type Hash = RankingBlockHash;
 
     fn hash(&self) -> Self::Hash {
-        todo!()
+        RankingBlockHash(CryptoHash::mock(&self))
     }
 }
 
-impl<'a> property::RankingBlock<'a> for RankingBlock {
+impl property::RankingBlock for RankingBlock {
     type PrevEraHash = era1::BlockHash;
     type InputBlockHash = InputBlockHash;
     fn parent_hash(&self) -> Crossing<Self::PrevEraHash, Self::Hash> {
@@ -59,10 +60,10 @@ impl<'a> property::RankingBlock<'a> for RankingBlock {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Hash)]
 pub struct MinerId(PublicKey);
 
-#[derive(Clone)]
+#[derive(Clone, Hash)]
 pub struct InputBlockHeader {
     pub content_hash: CryptoHash,
     pub nonce: [u8; 32],
@@ -81,11 +82,11 @@ impl InputBlockHeader {
     }
 }
 
-impl<'a> property::HasHash<'a> for InputBlockHeader {
+impl property::HasHash for InputBlockHeader {
     type Hash = InputBlockHash;
 
     fn hash(&self) -> Self::Hash {
-        todo!()
+        InputBlockHash(CryptoHash::mock(&self))
     }
 }
 
@@ -116,7 +117,7 @@ impl property::HasHeader for InputBlock {
 pub struct Era2;
 
 impl property::Era for Era2 {
-    type RankingBlock<'a> = RankingBlock;
+    type RankingBlock = RankingBlock;
     type InputBlock<'a> = InputBlock;
     type Transaction<'a> = Transaction;
     type Ledger<'a> = Ledger;

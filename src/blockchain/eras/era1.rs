@@ -41,6 +41,7 @@ impl<'a> property::Ledger<'a> for Ledger {
     }
 }
 
+#[derive(PartialEq, Clone, Debug, Eq, Hash)]
 pub struct TransactionHash(CryptoHash);
 
 impl From<TransactionHash> for CryptoHash {
@@ -57,7 +58,7 @@ pub struct Transaction {
     pub signature: Signature<AccountId, Transaction>,
 }
 
-impl<'a> property::HasHash<'a> for Transaction {
+impl property::HasHash for Transaction {
     type Hash = TransactionHash;
 
     fn hash(&self) -> Self::Hash {
@@ -66,8 +67,8 @@ impl<'a> property::HasHash<'a> for Transaction {
     }
 }
 
-#[derive(Clone)]
-pub struct BlockHash(CryptoHash);
+#[derive(Clone, PartialEq, Debug, Hash, Eq)]
+pub struct BlockHash(pub CryptoHash);
 
 impl From<BlockHash> for CryptoHash {
     fn from(h: BlockHash) -> Self {
@@ -75,10 +76,16 @@ impl From<BlockHash> for CryptoHash {
     }
 }
 
-#[derive(Clone)]
-pub struct ValidatorId(PublicKey);
+#[derive(Clone, Hash)]
+pub struct ValidatorId(pub PublicKey);
 
-#[derive(Clone)]
+impl From<ValidatorId> for PublicKey {
+    fn from(v: ValidatorId) -> Self {
+        v.0
+    }
+}
+
+#[derive(Clone, Hash)]
 pub struct BlockHeader {
     pub parent_hash: BlockHash,
     pub epoch_id: EpochId,
@@ -89,11 +96,11 @@ pub struct BlockHeader {
     pub signature: Signature<ValidatorId, BlockHeader>,
 }
 
-impl<'a> property::HasHash<'a> for BlockHeader {
+impl property::HasHash for BlockHeader {
     type Hash = BlockHash;
 
     fn hash(&self) -> Self::Hash {
-        todo!()
+        BlockHash(CryptoHash::mock(&self))
     }
 }
 
@@ -101,7 +108,7 @@ impl<'a> property::HasHash<'a> for BlockHeader {
 /// we can treat ranking blocks as small blocks, as if they were the traditional
 /// headers, and treat input blocks as full.
 ///
-impl<'a> property::RankingBlock<'a> for BlockHeader {
+impl property::RankingBlock for BlockHeader {
     type PrevEraHash = !;
     type InputBlockHash = BlockHash;
 
@@ -146,7 +153,7 @@ pub struct Era1;
 
 impl property::Era for Era1 {
     type Transaction<'a> = Transaction;
-    type RankingBlock<'a> = BlockHeader;
+    type RankingBlock = BlockHeader;
     type InputBlock<'a> = Block;
     type Ledger<'a> = Ledger;
 }

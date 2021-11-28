@@ -1,33 +1,46 @@
+use std::fmt::Debug;
+
 use super::CryptoHash;
+
+/// The rank, or distance from the genesis block.
+/// The genesis block has height 0.
+pub type Height = u64;
 
 /// An "either" type for things that can cross two eras,
 /// like the parent hash of a block, it may be pointing
 /// at a parent in the previous era.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug, Hash)]
 pub enum Crossing<P, C> {
     Prev(P),
     Curr(C),
 }
 
-pub trait HasHash<'a> {
-    type Hash: Into<CryptoHash>;
+/// Unwrap the current value when there is no previous possibility.
+pub fn uncross<C>(c: Crossing<!, C>) -> C {
+    match c {
+        Crossing::Curr(c) => c,
+        Crossing::Prev(_) => unreachable!(),
+    }
+}
+
+pub trait HasHash {
+    type Hash: Into<CryptoHash> + Send + Sync + PartialEq + Eq + Debug + std::hash::Hash + Clone;
 
     fn hash(&self) -> Self::Hash;
 }
 
 pub trait HasHeader {
-    type Header;
+    type Header: HasHash + Clone + Sync + Send;
 
     fn header(&self) -> Self::Header;
 }
 
 /// Derive `HasHash` for things that have a header which has a hash.
-impl<'a, B> HasHash<'a> for B
+impl<B> HasHash for B
 where
     B: HasHeader,
-    B::Header: HasHash<'a>,
 {
-    type Hash = <<B as HasHeader>::Header as HasHash<'a>>::Hash;
+    type Hash = <<B as HasHeader>::Header as HasHash>::Hash;
 
     fn hash(&self) -> Self::Hash {
         self.header().hash()
@@ -58,12 +71,12 @@ pub trait HasTransactions<'a> {
 /// block header, and the input block to be the full block. We can somehow detect
 /// that we already have the input header if it's the same as the ranking block
 /// itself. The storage for ranking blocks and input headers can then be the same.
-pub trait RankingBlock<'a>: HasHash<'a> {
-    type PrevEraHash;
+pub trait RankingBlock: HasHash {
+    type PrevEraHash: PartialEq + Debug;
     type InputBlockHash;
 
     fn parent_hash(&self) -> Crossing<Self::PrevEraHash, Self::Hash>;
-    fn height(&self) -> u64;
+    fn height(&self) -> Height;
     fn input_block_hashes(&self) -> Vec<Self::InputBlockHash>;
 }
 
@@ -84,18 +97,29 @@ pub trait Era {
     type Transaction<'a>;
 
     /// Input block carry the transactions.
-    type InputBlock<'a>: HasHash<'a>
-        + HasHeader
-        + HasTransactions<'a, Transaction = Self::Transaction<'a>>;
+    ///
+    /// Input blocks might have other input blocks as parents, however we can require that
+    /// ranking blocks explicitly include references to them, in an order that satisifies
+    /// their topological structure. Otherwise the DAG structure of input blocks could just
+    /// be a partial order; the ranking blocks define a cononic ordering because there is
+    /// a single vector of hashes. It also simplifies syncing: a ranking block must mention
+    /// all the input blocks that it wants to include, so we don't have to worry about
+    /// missing transitive dependencies.
+    type InputBlock<'a>: HasHeader + HasTransactions<'a, Transaction = Self::Transaction<'a>>;
 
     /// The ranking blocks refer to input blocks by their hashes.
     /// This could be a self-reference.
-    type RankingBlock<'a>: RankingBlock<
-        'a,
-        InputBlockHash = <Self::InputBlock<'a> as HasHash<'a>>::Hash,
-    >;
+    type RankingBlock: RankingBlock<InputBlockHash = <Self::InputBlock<'static> as HasHash>::Hash>
+        + Clone
+        + Send
+        + Sync;
 
     /// The ledger accepts transactions, but it can also contain data
     /// to validate ranking blocks, e.g. PoS stake distribution.
     type Ledger<'a>: Ledger<'a, Transaction = Self::Transaction<'a>>;
 }
+
+pub type EraRankingBlock<E: Era> = E::RankingBlock;
+pub type EraRankingBlockHash<E: Era> = <E::RankingBlock as HasHash>::Hash;
+pub type EraInputBlockHash<E: Era> = <E::InputBlock<'static> as HasHash>::Hash;
+pub type EraInputBlockHeader<E: Era> = <E::InputBlock<'static> as HasHeader>::Header;

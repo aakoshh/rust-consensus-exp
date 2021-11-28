@@ -10,7 +10,7 @@ use crate::blockchain::{ecdsa::Signature, CryptoHash};
 
 use super::{era2, Crossing};
 
-#[derive(Clone)]
+#[derive(Clone, Hash)]
 pub struct UsefulWorkHash(CryptoHash);
 
 #[derive(Clone)]
@@ -26,7 +26,7 @@ pub struct UsefulWorkStatus {
     remaining_reward: Amount,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Hash)]
 pub struct UsefulWorkSubmission {
     useful_work_hash: UsefulWorkHash,
     solution: Vec<u8>,
@@ -52,10 +52,10 @@ impl<'a> property::Ledger<'a> for Ledger {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug, Eq, Hash)]
 pub struct InputBlockHash(CryptoHash);
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug, Eq, Hash)]
 pub struct RankingBlockHash(CryptoHash);
 
 impl From<RankingBlockHash> for CryptoHash {
@@ -70,6 +70,7 @@ impl From<InputBlockHash> for CryptoHash {
     }
 }
 
+#[derive(Clone, Hash)]
 pub struct RankingBlock {
     pub parent_hash: Crossing<era2::RankingBlockHash, RankingBlockHash>,
     pub epoch_id: EpochId,
@@ -80,15 +81,15 @@ pub struct RankingBlock {
     pub signature: Signature<ValidatorId, RankingBlock>,
 }
 
-impl<'a> property::HasHash<'a> for RankingBlock {
+impl property::HasHash for RankingBlock {
     type Hash = RankingBlockHash;
 
     fn hash(&self) -> Self::Hash {
-        todo!()
+        RankingBlockHash(CryptoHash::mock(&self))
     }
 }
 
-impl<'a> property::RankingBlock<'a> for RankingBlock {
+impl property::RankingBlock for RankingBlock {
     type PrevEraHash = era2::RankingBlockHash;
     type InputBlockHash = InputBlockHash;
 
@@ -105,7 +106,7 @@ impl<'a> property::RankingBlock<'a> for RankingBlock {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Hash)]
 pub struct InputBlockHeader {
     pub parent_hashes: Vec<InputBlockHash>,
     pub content_hash: CryptoHash,
@@ -130,11 +131,11 @@ impl InputBlockHeader {
     }
 }
 
-impl<'a> property::HasHash<'a> for InputBlockHeader {
+impl property::HasHash for InputBlockHeader {
     type Hash = InputBlockHash;
 
     fn hash(&self) -> Self::Hash {
-        todo!()
+        InputBlockHash(CryptoHash::mock(&self))
     }
 }
 
@@ -165,7 +166,7 @@ impl<'a> property::HasTransactions<'a> for InputBlock {
 pub struct Era3;
 
 impl property::Era for Era3 {
-    type RankingBlock<'a> = RankingBlock;
+    type RankingBlock = RankingBlock;
     type InputBlock<'a> = InputBlock;
     type Transaction<'a> = Transaction;
     type Ledger<'a> = Ledger;

@@ -12,9 +12,12 @@ use crate::{
             era2, era3, CoEra, Eras,
         },
         property::*,
-        protocols::sync::{
-            consumer::Consumer,
-            producer::{Producer, ReadPointer},
+        protocols::{
+            sync::{
+                consumer::Consumer,
+                producer::{Producer, ReadPointer},
+            },
+            Cancelable,
         },
         store::{
             block::{BlockStore1, BlockStore2, BlockStore3, CoBlockStore},
@@ -167,9 +170,11 @@ fn chain_sync() {
         BlockStore3::new(vec![], vec![]),
     ));
 
+    let cancel_token = Cancelable::new();
+    let consumer =
+        Consumer::<CoEra, CoBlockStore>::new(consumer_store.clone(), cancel_token.clone());
     let producer =
         Producer::<CoEra, CoBlockStore>::new(producer_store.clone(), read_pointer.clone());
-    let consumer = Consumer::<CoEra, CoBlockStore>::new(consumer_store.clone());
 
     let (server_chan, client_chan) = session_channel();
 
@@ -194,5 +199,15 @@ fn chain_sync() {
         consumer_store.has_ranking_block(&eb7a.hash())
     }));
 
-    // TODO: Signal the producer/consumer to shut down.
+    // Cancel the consumer. This should close the channel as it goes out of scope,
+    // which should cause the producer to exit as well.
+    cancel_token.cancel();
+
+    // Currently we only check cancel conditions between the handling of next calls,
+    // so first the client needs to have an event.
+    let eb8a = make_block_era3(&eb7a);
+    atomically(|| producer_store.add_ranking_block(eb8a.clone()));
+
+    cons_t.join().unwrap().unwrap();
+    prod_t.join().unwrap().unwrap();
 }

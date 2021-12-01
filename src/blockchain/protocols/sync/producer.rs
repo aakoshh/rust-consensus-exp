@@ -64,15 +64,15 @@ pub struct Producer<E: Era, S> {
 }
 
 impl<E: Era + 'static, S: BlockStore<E>> Producer<E, S> {
-    pub fn new(chain_state: Arc<ChainStore<E, S>>, read_pointer: Arc<ReadPointer<E>>) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn new(chain_state: Arc<ChainStore<E, S>>, read_pointer: Arc<ReadPointer<E>>) -> Self {
+        Self {
             chain_state,
             read_pointer,
-        })
+        }
     }
 
     /// Protocol implementation for the producer, feeding a consumer its longest chain.
-    pub fn sync_chain(&self, chan: Chan<Rec<protocol::Server<E>>, ()>) -> SessionResult<()> {
+    pub fn sync_chain(self, chan: Chan<Rec<protocol::Server<E>>, ()>) -> SessionResult<()> {
         let mut c: SChan0<E> = chan.enter();
         let t = Duration::from_secs(60);
         loop {

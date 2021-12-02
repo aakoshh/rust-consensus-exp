@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use crate::{
     blockchain::{
         property::*,
-        protocols::sync::messages::{self, AwaitReply, FindIntersect, RollBackward, RollForward},
+        protocols::sync::messages::{self, AwaitReply, RollBackward, RollForward},
         store::{BlockStore, ChainStore, StoreError},
     },
     offer,
@@ -95,7 +95,7 @@ impl<E: Era + 'static, S: BlockStore<E>> Producer<E, S> {
 
     /// Find the first known hash in the request.
     fn intersect(&self, c: SChan1<E, protocol::Intersect<E>>) -> SessionResult<SChan0<E>> {
-        let (c, FindIntersect(hashes)) = c.recv(Duration::ZERO)?;
+        let (c, messages::FindIntersect(hashes)) = c.recv(Duration::ZERO)?;
 
         let first_known = atomically(|| {
             for h in &hashes {
@@ -121,18 +121,21 @@ impl<E: Era + 'static, S: BlockStore<E>> Producer<E, S> {
     /// Otherwise retry until we have new blocks available.
     fn next(&self, c: SChan1<E, protocol::Next<E>>) -> SessionResult<SChan0<E>> {
         let (c, messages::RequestNext) = c.recv(Duration::ZERO)?;
-        match self.get_next(false) {
-            Some((b, false)) => c.sel1().sel1().send(RollForward(b))?.zero(),
-            Some((b, true)) => c.sel1().sel2().send(RollBackward(b.hash()))?.zero(),
+
+        let c = match self.get_next(false) {
+            Some((b, false)) => c.sel1().sel1().send(RollForward(b))?,
+            Some((b, true)) => c.sel1().sel2().send(RollBackward(b.hash()))?,
             None => {
                 let c = c.sel2().send(AwaitReply)?;
                 match self.get_next(true) {
-                    Some((b, false)) => c.sel1().send(RollForward(b))?.zero(),
-                    Some((b, true)) => c.sel2().send(RollBackward(b.hash()))?.zero(),
+                    Some((b, false)) => c.sel1().send(RollForward(b))?,
+                    Some((b, true)) => c.sel2().send(RollBackward(b.hash()))?,
                     None => unreachable!(),
                 }
             }
-        }
+        };
+
+        c.zero()
     }
 
     /// Fetch the next thing to feed to the consumer.

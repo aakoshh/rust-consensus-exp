@@ -8,7 +8,7 @@ use crate::{
     },
     offer,
     session_types::{Chan, Rec, SessionResult},
-    stm::{abort, atomically, atomically_or_err, retry, TVar},
+    stm::{abort, atomically, atomically_or_err, retry, StmResult, TVar},
 };
 
 use super::{
@@ -31,10 +31,10 @@ pub struct ReadPointer<E: Era> {
     /// Remember the last header we have relayed to the consumer.
     /// Give them the next block when they ask, unless we have to
     /// roll back first.
-    pub last_ranking_block: TVar<EraRankingBlock<E>>,
+    last_ranking_block: TVar<EraRankingBlock<E>>,
     /// Indicate that the next message needs to be a rollback
     /// to the `last_header`, and then we go on from there.
-    pub needs_rollback: TVar<bool>,
+    needs_rollback: TVar<bool>,
 }
 
 impl<E: Era + 'static> ReadPointer<E> {
@@ -46,6 +46,15 @@ impl<E: Era + 'static> ReadPointer<E> {
             last_ranking_block: TVar::new(genesis),
             needs_rollback: TVar::new(false),
         })
+    }
+
+    pub fn last_ranking_block(&self) -> StmResult<Arc<EraRankingBlock<E>>> {
+        self.last_ranking_block.read()
+    }
+
+    pub fn rollback_to(&self, block: EraRankingBlock<E>) -> StmResult<()> {
+        self.last_ranking_block.write(block)?;
+        self.needs_rollback.write(true)
     }
 }
 

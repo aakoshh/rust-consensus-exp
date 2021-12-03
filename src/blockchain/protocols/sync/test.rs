@@ -183,7 +183,7 @@ fn chain_sync() {
 
     thread::sleep(Duration::from_millis(250));
 
-    let new_read_pointer = atomically(|| read_pointer.last_ranking_block.read());
+    let new_read_pointer = atomically(|| read_pointer.last_ranking_block());
     assert_eq!(new_read_pointer.hash(), eb6a.hash());
     assert!(atomically(|| {
         consumer_store.has_ranking_block(&eb6a.hash())

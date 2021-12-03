@@ -74,7 +74,16 @@ impl VVar {
 
 struct WaitQueue {
     /// Store the last version which was written to avoid race condition where the notification
-    /// happens before the waiters would subscribe and then there's no further event.
+    /// happens before the waiters would subscribe and then there's no further event that would
+    /// unpark them, causing them to wait forever or until they time out.
+    ///
+    /// This can happen if the order of events on thread A and B are:
+    /// 1. `atomically` on A returns `Retry`
+    /// 2. `commit` on B updates the versions
+    /// 3. `notify` on B finds nobody in the wait queues
+    /// 4. `wait` on A adds itself to the wait queues
+    ///
+    /// By having `notify` update the `last_written_version` we make sure that `wait` sees it.
     last_written_version: Version,
     /// Threads with their notifications flags that wait for the `TVar` to get an update.
     waiting: HashMap<ThreadId, (Thread, Arc<AtomicBool>)>,
@@ -524,7 +533,10 @@ impl Transaction {
         // Only unpark threads at the end, to make sure they the most recent flag.
         let mut unpark = HashMap::new();
 
-        let locks = write_log.iter().map(|(_, lvar)| lvar.svar.queue.lock());
+        let locks = write_log
+            .iter()
+            .map(|(_, lvar)| lvar.svar.queue.lock())
+            .collect::<Vec<_>>();
 
         for mut lock in locks {
             lock.last_written_version = commit_version;

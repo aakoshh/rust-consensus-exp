@@ -518,6 +518,23 @@ impl CoBlockStore {
         .unwrap()
     }
 
+    fn earliest<F1, F2, F3, T>(&self, f1: F1, f2: F2, f3: F3) -> StmResult<Option<T>>
+    where
+        F1: Fn(&BlockStore1) -> StmResult<Option<T>>,
+        F2: Fn(&BlockStore2) -> StmResult<Option<T>>,
+        F3: Fn(&BlockStore3) -> StmResult<Option<T>>,
+    {
+        if let Some(v) = f1(&self.store1)? {
+            Ok(Some(v))
+        } else if let Some(v) = f2(&self.store2)? {
+            Ok(Some(v))
+        } else if let Some(v) = f3(&self.store3)? {
+            Ok(Some(v))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn latest<F1, F2, F3, T>(&self, f1: F1, f2: F2, f3: F3) -> StmResult<Option<T>>
     where
         F1: Fn(&BlockStore1) -> StmResult<Option<T>>,
@@ -538,7 +555,7 @@ impl CoBlockStore {
 
 impl BlockStore<CoEra> for CoBlockStore {
     fn first_ranking_block(&self) -> StmResult<Option<EraRankingBlock<CoEra>>> {
-        self.latest(
+        self.earliest(
             |s| s.first_ranking_block().map(|b| b.map(Eras::Era1)),
             |s| s.first_ranking_block().map(|b| b.map(Eras::Era2)),
             |s| s.first_ranking_block().map(|b| b.map(Eras::Era3)),

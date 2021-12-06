@@ -11,7 +11,7 @@ use crate::{
     },
     offer,
     session_types::{Chan, HasDual, Rec, SessionError, SessionResult},
-    stm::{atomically, atomically_or_err},
+    stm::{abort, atomically, atomically_or_err},
 };
 
 use super::{messages::*, protocol};
@@ -103,22 +103,19 @@ impl<E: Era + 'static, S: BlockStore<E>> Consumer<E, S> {
                 // TODO: Here we could do bisection to find the best possible intersect,
                 // but for this example I'll just use whatever we found in the first round.
 
-                let ok = atomically(|| {
+                atomically(|| {
                     if let Some(block) = self.chain_store.get_ranking_block_by_hash(&hash)? {
-                        self.chain_store.remove_ranking_blocks_above_height(block.height())?;
-                        Ok(true)
+                        self.chain_store.remove_ranking_blocks_above_height(block.height())
                     } else {
-                        // The block could have been removed if we switched to a different fork.
-                        Ok(false)
+                        // We dedicated this instance of the `ChainStore` to track this particular
+                        // producer, nobody else is going to change it after the syncing has started.
+                        // If we don't find the block that we ourselves sent earlier than something
+                        // went horribly wrong.
+                        unreachable!("We can't find our own anchor!")
                     }
                 });
 
-                if ok {
-                    c.zero()
-                } else {
-                    // Try syncing again.
-                    self.intersect(c.zero()?.sel1())
-                }
+                c.zero()
             },
             NotFound => {
                 let (_c, IntersectNotFound) = c.recv(Duration::ZERO)?;
@@ -175,15 +172,19 @@ impl<E: Era + 'static, S: BlockStore<E>> Consumer<E, S> {
             Backward => {
                 let (c, RollBackward(hash)) = c.recv(Duration::ZERO)?;
 
-                atomically(|| {
+                let result = atomically_or_err(|| {
                     if let Some(b) = self.chain_store.get_ranking_block_by_hash(&hash)? {
                         self.chain_store.remove_ranking_blocks_above_height(b.height())
                     } else {
-                        Ok(())
+                        // The producer should know exactly what hashes are in our chain!
+                        abort(StoreError::RankingBlockDoesNotExist)
                     }
                 });
 
-                c.zero()
+                match result {
+                    Ok(()) => c.zero(),
+                    Err(e) => c.abort_dyn(e)
+                }
             }
         }
     }

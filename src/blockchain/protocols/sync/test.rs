@@ -9,7 +9,9 @@ use crate::{
         ecdsa::{PublicKey, Signature},
         eras::{
             era1::{self, ValidatorId},
-            era2, era3, CoEra, Eras,
+            era2, era3,
+            store::{era1::BlockStore1, era2::BlockStore2, era3::BlockStore3, CoBlockStore},
+            CoEra, Eras,
         },
         property::*,
         protocols::{
@@ -19,10 +21,7 @@ use crate::{
             },
             Cancelable,
         },
-        store::{
-            block::{BlockStore1, BlockStore2, BlockStore3, CoBlockStore},
-            BlockStore, ChainStore,
-        },
+        store::{BlockStore, ChainStore},
         CryptoHash,
     },
     session_types::session_channel,

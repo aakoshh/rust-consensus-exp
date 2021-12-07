@@ -18,6 +18,7 @@ mod coprod;
 pub mod era1;
 pub mod era2;
 pub mod era3;
+pub mod store;
 
 #[derive(Clone, PartialEq, Debug, Eq, Hash)]
 pub enum Eras<E1, E2, E3> {

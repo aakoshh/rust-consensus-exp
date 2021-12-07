@@ -6,13 +6,11 @@ use crate::{
     stm::{abort, atomically_or_err, StmResult},
 };
 
-use self::{era1::BlockStore1, era2::BlockStore2, era3::BlockStore3};
+use crate::blockchain::eras::{
+    era1::store::BlockStore1, era2::store::BlockStore2, era3::store::BlockStore3,
+};
 
 use super::{CoEra, Eras};
-
-pub mod era1;
-pub mod era2;
-pub mod era3;
 
 /// Block store imlementation for the coproduct of eras.
 pub struct CoBlockStore {

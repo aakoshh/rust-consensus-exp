@@ -8,9 +8,10 @@ use crate::{
     blockchain::{
         ecdsa::{PublicKey, Signature},
         eras::{
-            era1::{self, ValidatorId},
-            era2, era3,
-            store::{era1::BlockStore1, era2::BlockStore2, era3::BlockStore3, CoBlockStore},
+            coera::store::CoBlockStore,
+            era1::{self, store::BlockStore1, ValidatorId},
+            era2::{self, store::BlockStore2},
+            era3::{self, store::BlockStore3},
             CoEra, Eras,
         },
         property::*,

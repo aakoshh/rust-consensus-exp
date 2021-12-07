@@ -1,11 +1,11 @@
-use crate::blockchain::property::{self, HasHash};
+use crate::blockchain::property::{self, Crossing, HasHash};
 use crate::blockchain::{
     ecdsa::{PublicKey, Signature},
     CryptoHash,
 };
 use im::HashMap;
 
-use super::Crossing;
+pub mod store;
 
 pub type Amount = u64;
 pub type Nonce = u64;

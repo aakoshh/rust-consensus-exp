@@ -1,61 +1,18 @@
-use im::HashMap;
-
-use crate::blockchain::eras::era1::{
-    Account, AccountId, Amount, EpochId, SlotId, Transaction as Transfer, TransactionError,
-    ValidatorId,
+use crate::blockchain::eras::era1::{EpochId, Ledger, SlotId, Transaction, ValidatorId};
+use crate::blockchain::property::{self, Crossing};
+use crate::blockchain::{
+    ecdsa::{PublicKey, Signature},
+    CryptoHash,
 };
-use crate::blockchain::eras::era2::MinerId;
-use crate::blockchain::property;
-use crate::blockchain::{ecdsa::Signature, CryptoHash};
 
-use super::{era2, Crossing};
+use super::era1;
 
-#[derive(Clone, Hash)]
-pub struct UsefulWorkHash(CryptoHash);
+pub mod store;
 
-#[derive(Clone)]
-pub struct UsefulWorkHeader {
-    account_id: AccountId,
-    problem: Vec<u8>,
-    total_reward: Amount,
-    signature: Signature<AccountId, UsefulWorkHeader>,
-}
-
-#[derive(Clone)]
-pub struct UsefulWorkStatus {
-    remaining_reward: Amount,
-}
-
-#[derive(Clone, Hash)]
-pub struct UsefulWorkSubmission {
-    useful_work_hash: UsefulWorkHash,
-    solution: Vec<u8>,
-}
-
-pub enum Transaction {
-    AddUsefulWork(UsefulWorkHeader),
-    Transfer(Transfer),
-}
-
-#[derive(Clone)]
-pub struct Ledger {
-    pub accounts: HashMap<AccountId, Account>,
-    pub useful_work_classifieds: HashMap<UsefulWorkHash, (UsefulWorkHeader, UsefulWorkStatus)>,
-}
-
-impl<'a> property::Ledger<'a> for Ledger {
-    type Transaction = Transaction;
-    type Error = TransactionError;
-
-    fn apply_transaction(&'a self, tx: &Self::Transaction) -> Result<Self, Self::Error> {
-        todo!()
-    }
-}
-
-#[derive(Clone, PartialEq, Debug, Eq, Hash)]
+#[derive(Clone, PartialEq, Debug, Hash, Eq)]
 pub struct InputBlockHash(CryptoHash);
 
-#[derive(Clone, PartialEq, Debug, Eq, Hash)]
+#[derive(Clone, PartialEq, Debug, Hash, Eq)]
 pub struct RankingBlockHash(CryptoHash);
 
 impl From<RankingBlockHash> for CryptoHash {
@@ -72,7 +29,7 @@ impl From<InputBlockHash> for CryptoHash {
 
 #[derive(Clone, Hash)]
 pub struct RankingBlock {
-    pub parent_hash: Crossing<era2::RankingBlockHash, RankingBlockHash>,
+    pub parent_hash: Crossing<era1::BlockHash, RankingBlockHash>,
     pub epoch_id: EpochId,
     pub slot_id: SlotId,
     pub height: u64,
@@ -90,9 +47,8 @@ impl property::HasHash for RankingBlock {
 }
 
 impl property::RankingBlock for RankingBlock {
-    type PrevEraHash = era2::RankingBlockHash;
+    type PrevEraHash = era1::BlockHash;
     type InputBlockHash = InputBlockHash;
-
     fn parent_hash(&self) -> Crossing<Self::PrevEraHash, Self::Hash> {
         self.parent_hash.clone()
     }
@@ -107,10 +63,11 @@ impl property::RankingBlock for RankingBlock {
 }
 
 #[derive(Clone, Hash)]
+pub struct MinerId(PublicKey);
+
+#[derive(Clone, Hash)]
 pub struct InputBlockHeader {
-    pub parent_hashes: Vec<InputBlockHash>,
     pub content_hash: CryptoHash,
-    pub useful_work: UsefulWorkSubmission,
     pub nonce: [u8; 32],
     pub miner_id: MinerId,
     pub signature: Signature<MinerId, InputBlockHeader>,
@@ -119,10 +76,6 @@ pub struct InputBlockHeader {
 impl InputBlockHeader {
     /// Verify that `hash(hash_without_nonce ++ nonce)` starts with `target_difficulty` number of zeroes.
     pub fn verify_pow(&self, target_difficulty: u8) -> bool {
-        todo!()
-    }
-
-    pub fn verify_pouw(&self) -> bool {
         todo!()
     }
 
@@ -144,14 +97,6 @@ pub struct InputBlock {
     pub transactions: Vec<Transaction>,
 }
 
-impl property::HasHeader for InputBlock {
-    type Header = InputBlockHeader;
-
-    fn header(&self) -> Self::Header {
-        self.header.clone()
-    }
-}
-
 impl<'a> property::HasTransactions<'a> for InputBlock {
     type Transaction = Transaction;
 
@@ -163,9 +108,17 @@ impl<'a> property::HasTransactions<'a> for InputBlock {
     }
 }
 
-pub struct Era3;
+impl property::HasHeader for InputBlock {
+    type Header = InputBlockHeader;
 
-impl property::Era for Era3 {
+    fn header(&self) -> Self::Header {
+        self.header.clone()
+    }
+}
+
+pub struct Era2;
+
+impl property::Era for Era2 {
     type RankingBlock = RankingBlock;
     type InputBlock<'a> = InputBlock;
     type Transaction<'a> = Transaction;

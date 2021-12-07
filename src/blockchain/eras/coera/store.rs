@@ -3,7 +3,7 @@ use crate::{
         property::*,
         store::{BlockStore, StoreError},
     },
-    stm::{abort, atomically_or_err, StmResult},
+    stm::{abort, atomically_or_err, StmDynResult, StmResult},
 };
 
 use crate::blockchain::eras::{
@@ -110,7 +110,7 @@ impl BlockStore<CoEra> for CoBlockStore {
         )
     }
 
-    fn add_ranking_block(&self, b: EraRankingBlock<CoEra>) -> StmResult<()> {
+    fn add_ranking_block(&self, b: EraRankingBlock<CoEra>) -> StmDynResult<()> {
         match b {
             Eras::Era1(b) => self.store1.add_ranking_block(b),
             Eras::Era2(b) => self.store2.add_ranking_block(b),
@@ -161,7 +161,7 @@ impl BlockStore<CoEra> for CoBlockStore {
         Ok(())
     }
 
-    fn add_input_block_header(&self, h: EraInputBlockHeader<CoEra>) -> StmResult<()> {
+    fn add_input_block_header(&self, h: EraInputBlockHeader<CoEra>) -> StmDynResult<()> {
         match h {
             Eras::Era1(h) => self.store1.add_input_block_header(h),
             Eras::Era2(h) => self.store2.add_input_block_header(h),

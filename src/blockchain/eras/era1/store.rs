@@ -4,7 +4,7 @@ use crate::{
         property::*,
         store::{block::Hashed, BlockStore, StoreError},
     },
-    stm::{abort, StmResult, TVar},
+    stm::{abort, StmDynResult, StmResult, TVar},
 };
 
 /// Block store for era 1.
@@ -45,7 +45,7 @@ impl BlockStore<Era1> for BlockStore1 {
         self.headers.read().map(|v| v.back().map(|h| h.1.clone()))
     }
 
-    fn add_ranking_block(&self, b: EraRankingBlock<Era1>) -> StmResult<()> {
+    fn add_ranking_block(&self, b: EraRankingBlock<Era1>) -> StmDynResult<()> {
         let headers = self.headers.read()?;
         let last_hash = headers.last().unwrap().0.clone();
         let parent_hash = uncross(b.parent_hash());
@@ -114,7 +114,7 @@ impl BlockStore<Era1> for BlockStore1 {
         })
     }
 
-    fn add_input_block_header(&self, h: EraInputBlockHeader<Era1>) -> StmResult<()> {
+    fn add_input_block_header(&self, h: EraInputBlockHeader<Era1>) -> StmDynResult<()> {
         // In this era the two are the same, so in fact this method should never be called.
         self.add_ranking_block(h)
     }

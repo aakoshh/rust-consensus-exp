@@ -1,6 +1,6 @@
 use crate::{
     blockchain::property::*,
-    stm::{abort, StmResult, TVar},
+    stm::{abort, StmDynResult, StmResult, TVar},
 };
 
 use super::StoreError;
@@ -14,7 +14,7 @@ pub trait BlockStore<E: Era> {
     fn last_ranking_block(&self) -> StmResult<Option<EraRankingBlock<E>>>;
 
     /// Extend the chain with a ranking block.
-    fn add_ranking_block(&self, b: EraRankingBlock<E>) -> StmResult<()>;
+    fn add_ranking_block(&self, b: EraRankingBlock<E>) -> StmDynResult<()>;
     fn get_ranking_block_by_height(&self, h: Height) -> StmResult<Option<EraRankingBlock<E>>>;
     fn get_ranking_block_by_hash(
         &self,
@@ -26,7 +26,7 @@ pub trait BlockStore<E: Era> {
     fn remove_ranking_blocks_above_height(&self, h: Height) -> StmResult<()>;
 
     /// Add an input block referenced by a ranking block.
-    fn add_input_block_header(&self, h: EraInputBlockHeader<E>) -> StmResult<()>;
+    fn add_input_block_header(&self, h: EraInputBlockHeader<E>) -> StmDynResult<()>;
     fn has_input_block_header(&self, h: &EraInputBlockHash<E>) -> StmResult<bool>;
     fn get_input_block_header_by_hash(
         &self,
@@ -105,7 +105,7 @@ impl<E: Era + 'static> BlockStore<E> for BlockStoreRnI<E> {
         self.rankings.read().map(|v| v.back().map(|h| h.1.clone()))
     }
 
-    fn add_ranking_block(&self, b: EraRankingBlock<E>) -> StmResult<()> {
+    fn add_ranking_block(&self, b: EraRankingBlock<E>) -> StmDynResult<()> {
         let is = self.inputs.read()?;
         for h in b.input_block_hashes() {
             if !is.contains_key(&h) {
@@ -130,7 +130,8 @@ impl<E: Era + 'static> BlockStore<E> for BlockStoreRnI<E> {
 
         let mut rs = rs.as_ref().clone();
         rs.push_back(hashed);
-        self.rankings.write(rs)
+        self.rankings.write(rs)?;
+        Ok(())
     }
 
     fn get_ranking_block_by_height(&self, h: Height) -> StmResult<Option<EraRankingBlock<E>>> {
@@ -182,12 +183,14 @@ impl<E: Era + 'static> BlockStore<E> for BlockStoreRnI<E> {
         Ok(())
     }
 
-    fn add_input_block_header(&self, h: EraInputBlockHeader<E>) -> StmResult<()> {
-        self.inputs.update(|m| {
-            let mut c = m.clone();
-            c.insert(h.hash(), h);
-            c
-        })
+    fn add_input_block_header(&self, h: EraInputBlockHeader<E>) -> StmDynResult<()> {
+        self.inputs
+            .update(|m| {
+                let mut c = m.clone();
+                c.insert(h.hash(), h);
+                c
+            })
+            .map_err(|e| e.into())
     }
 
     fn has_input_block_header(&self, h: &EraInputBlockHash<E>) -> StmResult<bool> {

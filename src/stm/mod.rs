@@ -22,11 +22,27 @@ pub enum StmError {
     /// to wait until at least one of the variables it
     /// read have changed, before being retried.
     Retry,
+}
+
+/// STM error extended with the ability to abort the transaction
+/// with a dynamic error. It is separate so that we rest assured
+/// that `atomically` will not throw an error, that only
+/// `atomically_or_err` allows abortions.
+pub enum StmDynError {
+    /// Regular error.
+    Control(StmError),
     /// Abort the tranasction and return an error.
     Abort(Box<dyn Error + Send + Sync>),
 }
 
+impl From<StmError> for StmDynError {
+    fn from(e: StmError) -> Self {
+        StmDynError::Control(e)
+    }
+}
+
 pub type StmResult<T> = Result<T, StmError>;
+pub type StmDynResult<T> = Result<T, StmDynError>;
 
 /// Unique ID for a `TVar`.
 type ID = u64;
@@ -199,8 +215,8 @@ pub fn guard(cond: bool) -> StmResult<()> {
     }
 }
 
-pub fn abort<T, E: Error + Send + Sync + 'static>(e: E) -> StmResult<T> {
-    Err(StmError::Abort(Box::new(e)))
+pub fn abort<T, E: Error + Send + Sync + 'static>(e: E) -> StmDynResult<T> {
+    Err(StmDynError::Abort(Box::new(e)))
 }
 
 /// Run the first function; if it returns a `Retry`,
@@ -254,7 +270,8 @@ pub fn atomically<F, T>(f: F) -> T
 where
     F: Fn() -> StmResult<T>,
 {
-    atomically_or_err(f).expect("Didn't expect `abort`. Use `atomically_or_err` instead.")
+    atomically_or_err(|| f().map_err(|e| StmDynError::Control(e)))
+        .expect("Didn't expect `abort`. Use `atomically_or_err` instead.")
 }
 
 /// Create a new transaction and run `f` until it returns a successful result and
@@ -263,7 +280,7 @@ where
 /// Make sure `f` is free of any side effects.
 pub fn atomically_or_err<F, T>(f: F) -> Result<T, Box<dyn Error + Send + Sync>>
 where
-    F: Fn() -> StmResult<T>,
+    F: Fn() -> StmDynResult<T>,
 {
     loop {
         TX.with(|tref| {
@@ -288,16 +305,16 @@ where
                         None
                     }
                 }
-                Err(StmError::Failure) => {
+                Err(StmDynError::Control(StmError::Failure)) => {
                     // We can retry straight away.
                     None
                 }
-                Err(StmError::Retry) => {
+                Err(StmDynError::Control(StmError::Retry)) => {
                     // Block this thread until there's a change.
                     tx.wait();
                     None
                 }
-                Err(StmError::Abort(e)) => Some(Err(e)),
+                Err(StmDynError::Abort(e)) => Some(Err(e)),
             }
         }) {
             return value;

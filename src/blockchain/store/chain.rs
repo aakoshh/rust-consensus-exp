@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     blockchain::property::*,
-    stm::{abort, atomically, StmResult, TVar},
+    stm::{abort, atomically, StmDynResult, StmResult, TVar},
 };
 
 use super::{block::BlockStore, StoreError};
@@ -63,7 +63,7 @@ impl<E: Era + 'static, S: BlockStore<E>> BlockStore<E> for ChainStore<E, S> {
         self.tip.read().map(|t| Some(t.as_ref().clone()))
     }
 
-    fn add_ranking_block(&self, b: EraRankingBlock<E>) -> StmResult<()> {
+    fn add_ranking_block(&self, b: EraRankingBlock<E>) -> StmDynResult<()> {
         let tip = self.tip.read()?;
         // We're in the context of a single era, so the parent will always be `Curr`,
         // by the virtue of the overall era repackaging the wrappers.
@@ -99,7 +99,7 @@ impl<E: Era + 'static, S: BlockStore<E>> BlockStore<E> for ChainStore<E, S> {
             })
     }
 
-    fn add_input_block_header(&self, h: EraInputBlockHeader<E>) -> StmResult<()> {
+    fn add_input_block_header(&self, h: EraInputBlockHeader<E>) -> StmDynResult<()> {
         self.block_store.add_input_block_header(h)
     }
 

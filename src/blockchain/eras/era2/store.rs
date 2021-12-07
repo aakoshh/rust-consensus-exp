@@ -4,7 +4,7 @@ use crate::{
         property::*,
         store::{block::BlockStoreRnI, BlockStore},
     },
-    stm::StmResult,
+    stm::{StmDynResult, StmResult},
 };
 
 /// Block store for era 2.
@@ -28,7 +28,7 @@ impl BlockStore<Era2> for BlockStore2 {
         self.0.last_ranking_block()
     }
 
-    fn add_ranking_block(&self, b: EraRankingBlock<Era2>) -> StmResult<()> {
+    fn add_ranking_block(&self, b: EraRankingBlock<Era2>) -> StmDynResult<()> {
         self.0.add_ranking_block(b)
     }
 
@@ -51,7 +51,7 @@ impl BlockStore<Era2> for BlockStore2 {
         self.0.remove_ranking_blocks_above_height(h)
     }
 
-    fn add_input_block_header(&self, h: EraInputBlockHeader<Era2>) -> StmResult<()> {
+    fn add_input_block_header(&self, h: EraInputBlockHeader<Era2>) -> StmDynResult<()> {
         self.0.add_input_block_header(h)
     }
 

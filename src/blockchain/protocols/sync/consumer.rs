@@ -174,7 +174,8 @@ impl<E: Era + 'static, S: BlockStore<E>> Consumer<E, S> {
 
                 let result = atomically_or_err(|| {
                     if let Some(b) = self.chain_store.get_ranking_block_by_hash(&hash)? {
-                        self.chain_store.remove_ranking_blocks_above_height(b.height())
+                        self.chain_store.remove_ranking_blocks_above_height(b.height())?;
+                        Ok(())
                     } else {
                         // The producer should know exactly what hashes are in our chain!
                         abort(StoreError::RankingBlockDoesNotExist)

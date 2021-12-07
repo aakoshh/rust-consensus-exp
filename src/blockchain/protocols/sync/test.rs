@@ -26,7 +26,7 @@ use crate::{
         CryptoHash,
     },
     session_types::session_channel,
-    stm::atomically,
+    stm::{atomically, atomically_or_err},
 };
 
 static SLOT: AtomicU64 = AtomicU64::new(0);
@@ -191,7 +191,7 @@ fn chain_sync() {
 
     // Add blocks to the producer state. Check that they make their way into the consumer state.
     let eb7a = make_block_era3(&eb6a);
-    atomically(|| producer_store.add_ranking_block(eb7a.clone()));
+    atomically_or_err(|| producer_store.add_ranking_block(eb7a.clone())).unwrap();
 
     thread::sleep(Duration::from_millis(250));
 
@@ -206,7 +206,7 @@ fn chain_sync() {
     // Currently we only check cancel conditions between the handling of next calls,
     // so first the client needs to have an event.
     let eb8a = make_block_era3(&eb7a);
-    atomically(|| producer_store.add_ranking_block(eb8a.clone()));
+    atomically_or_err(|| producer_store.add_ranking_block(eb8a.clone())).unwrap();
 
     cons_t.join().unwrap().unwrap();
     prod_t.join().unwrap().unwrap();
